@@ -16,10 +16,12 @@ from backend.db import (
 from backend.llm.gateway import EVENT_BUS, LLM_GATEWAY
 from backend.llm.prompts import MASTER_CHAT_SYSTEM_PROMPT, MASTER_PLANNER_SYSTEM_PROMPT
 from backend.parsers.indexer import (
+    SectionRetriever,
     build_response_outline_summary,
     build_tender_digest,
     parse_and_cache_document,
 )
+from backend.parsers.models import DocumentAST
 from backend.schemas import CATEGORY_LABELS, ChatMessage, ChecklistItem
 
 _RUNNING_TASKS: dict[str, asyncio.Task[Any]] = {}
@@ -38,17 +40,90 @@ def launch_background_inspection(project_id: str, recheck_only: bool = False) ->
     return True
 
 
-def _estimate_tokens_and_eta(items: list[ChecklistItem]) -> tuple[int, int]:
+def _estimate_plan_metrics(
+    items: list[ChecklistItem],
+    response_ast: DocumentAST | None = None,
+) -> tuple[int, float, int]:
+    """Estimate pre-run tokens, CNY cost, and ETA from actual retrieved sections and role pricing."""
     settings = get_settings()
     enabled = [it for it in items if it.enabled]
-    vision_cnt = sum(1 for it in enabled if it.requires_vision)
-    # ~3,800 tokens per text item + ~2,400 tokens per vision check + ~6,000 report assembly
-    est_tokens = len(enabled) * 3800 + vision_cnt * 2400 + 6000
-    text_conc = max(1, settings.routes.get("text_worker").concurrency if "text_worker" in settings.routes else 6)
-    vision_conc = max(1, settings.routes.get("vision_worker").concurrency if "vision_worker" in settings.routes else 3)
-    # ~4.5s avg per text LLM call divided by concurrency + vision calls + 6s report synthesis
-    est_sec = int((len(enabled) * 4.8) / text_conc + (vision_cnt * 5.0) / vision_conc + 7)
-    return est_tokens, max(8, est_sec)
+
+    text_route = settings.routes.get("text_worker")
+    vision_route = settings.routes.get("vision_worker")
+    report_route = settings.routes.get("report_assembler")
+
+    text_conc = max(1, text_route.concurrency if text_route else 6)
+    vision_conc = max(1, vision_route.concurrency if vision_route else 3)
+    vision_enabled = bool(vision_route and vision_route.enabled)
+
+    text_in_tokens = 0
+    text_out_tokens = 0
+    vision_in_tokens = 0
+    vision_out_tokens = 0
+    vision_calls = 0
+
+    if response_ast is not None and enabled:
+        retriever = SectionRetriever(response_ast)
+        outline_len = min(4500, len(build_response_outline_summary(response_ast)))
+        for it in enabled:
+            candidates = retriever.search(
+                f"{it.title} {it.requirement_text}",
+                keywords=it.search_keywords,
+                top_k=7,
+            )
+            cand_chars = min(14000, sum(min(5400, s.char_count) + 180 for s in candidates))
+            prompt_chars = cand_chars + outline_len + 950
+            text_in_tokens += int(prompt_chars * 0.68)
+            text_out_tokens += 320
+
+            if it.requires_vision and vision_enabled:
+                c_mids: list[str] = []
+                for c_sec in candidates[:4]:
+                    c_mids.extend(c_sec.media_ids)
+                    for tb in c_sec.tables:
+                        c_mids.extend(tb.media_ids)
+                img_cnt = min(3, max(1, len(set(c_mids))))
+                vision_in_tokens += img_cnt * 780 + 350
+                vision_out_tokens += 160
+                vision_calls += 1
+    else:
+        text_in_tokens = len(enabled) * 4200
+        text_out_tokens = len(enabled) * 320
+        for it in enabled:
+            if it.requires_vision and vision_enabled:
+                vision_in_tokens += 2 * 780 + 350
+                vision_out_tokens += 160
+                vision_calls += 1
+
+    report_in_tokens = len(enabled) * 140 + 1200 if enabled else 0
+    report_out_tokens = 700 if enabled else 0
+
+    t_in_p = text_route.input_price_per_m if text_route else 0.8
+    t_out_p = text_route.output_price_per_m if text_route else 2.0
+    v_in_p = vision_route.input_price_per_m if vision_route else 1.5
+    v_out_p = vision_route.output_price_per_m if vision_route else 4.5
+    r_in_p = report_route.input_price_per_m if report_route else 2.4
+    r_out_p = report_route.output_price_per_m if report_route else 9.6
+
+    est_cost = (
+        text_in_tokens * t_in_p
+        + text_out_tokens * t_out_p
+        + vision_in_tokens * v_in_p
+        + vision_out_tokens * v_out_p
+        + report_in_tokens * r_in_p
+        + report_out_tokens * r_out_p
+    ) / 1_000_000.0
+
+    est_tokens = (
+        text_in_tokens
+        + text_out_tokens
+        + vision_in_tokens
+        + vision_out_tokens
+        + report_in_tokens
+        + report_out_tokens
+    )
+    est_sec = int((len(enabled) * 4.8) / text_conc + (vision_calls * 5.0) / vision_conc + 7)
+    return est_tokens, round(est_cost, 3), max(8, est_sec)
 
 
 async def generate_inspection_plan(
@@ -175,7 +250,9 @@ async def generate_inspection_plan(
         )
 
     save_checklist(project_id, checklist)
-    est_tokens, est_sec = _estimate_tokens_and_eta(checklist)
+    est_tokens, est_cost, est_sec = await asyncio.to_thread(
+        _estimate_plan_metrics, checklist, response_ast
+    )
     proj_title = tender_ast.metadata.get("project_name") or proj.name
     if final_lot and f"{final_lot}标" not in proj_title:
         proj_title = f"{proj_title}（{final_lot}标段）"
@@ -193,6 +270,7 @@ async def generate_inspection_plan(
         completed_items=0,
         total_items=len(checklist),
         estimated_plan_tokens=est_tokens,
+        estimated_plan_cost=est_cost,
         estimated_plan_seconds=est_sec,
     )
     await EVENT_BUS.emit(project_id, "checklist_replaced", {"items": [it.model_dump() for it in checklist]})
@@ -207,7 +285,7 @@ async def generate_inspection_plan(
         f"{intro}\n\n"
         f"- **清单**：`{len(checklist)}` 项（红线 `{fatal_cnt}` · 验图 `{vision_cnt}`）\n"
         f"- **形式预警**：`{len(response_ast.deterministic_findings)}` 处\n"
-        f"- **预估**：`~{max(1, est_tokens // 1000)}k` Tokens · `~{est_sec}s`"
+        f"- **预估**：`~{max(1, round(est_tokens / 1000))}k` Tokens · `~¥{est_cost:.2f}` · `~{est_sec}s`"
     )
     msg = append_message(
         project_id,
@@ -220,6 +298,7 @@ async def generate_inspection_plan(
             "fatal_items": fatal_cnt,
             "vision_items": vision_cnt,
             "estimated_tokens": est_tokens,
+            "estimated_cost": est_cost,
             "estimated_seconds": est_sec,
         },
     )
@@ -333,11 +412,12 @@ async def handle_user_chat(project_id: str, user_text: str) -> ChatMessage:
                     plan_modified = True
         if plan_modified:
             save_checklist(project_id, proj.checklist)
-            est_tok, est_sec = _estimate_tokens_and_eta(proj.checklist)
+            est_tok, est_cost, est_sec = _estimate_plan_metrics(proj.checklist)
             await EVENT_BUS.sync_and_broadcast_telemetry(
                 project_id,
                 total_items=sum(1 for x in proj.checklist if x.enabled),
                 estimated_plan_tokens=est_tok,
+                estimated_plan_cost=est_cost,
                 estimated_plan_seconds=est_sec,
             )
             await EVENT_BUS.emit(

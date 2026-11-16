@@ -85,6 +85,8 @@ def test_handover_docs_and_gitignore_guardrails() -> None:
         "GitHub 仓库首次绑定与日常同步指南",
         "里程碑交接台账",
         "v0.2.0",
+        "v0.3.0",
+        "/api/settings/models",
     ):
         assert required_section in handover_text
 
@@ -249,3 +251,239 @@ async def test_global_redline_injection_and_failed_item_report_guard() -> None:
     assert rep is not None
     assert rep.overall_verdict == "high_risk"
     assert rep.fatal_issue_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_dynamic_models_api_pricing_and_plan_estimation() -> None:
+    import types
+    from backend.agents.master_agent import _estimate_plan_metrics
+    from backend.config import USD_TO_CNY_RATE
+    from backend.db import get_settings, save_settings
+    from backend.llm.gateway import LLM_GATEWAY
+
+    init_db()
+    LLM_GATEWAY._models_cache.clear()
+
+    # 1. Mock OpenAI/OpenRouter/Gemini style /models responses
+    def make_client_cls(payload: dict, status_code: int = 200):
+        class _FakeResp:
+            def __init__(self) -> None:
+                self.status_code = status_code
+                self.text = "error"
+
+            def json(self) -> dict:
+                return payload
+
+        class _FakeAsyncClient:
+            def __init__(self, **_kwargs: object) -> None:
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args: object) -> None:
+                return None
+
+            async def get(self, url: str, headers: dict | None = None):
+                assert url.endswith("/models")
+                assert headers and headers.get("Authorization", "").startswith("Bearer ")
+                return _FakeResp()
+
+        return _FakeAsyncClient
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Missing credentials -> 400
+        r_bad = await client.post("/api/settings/models", json={"base_url": "", "api_key": ""})
+        assert r_bad.status_code == 400
+
+        # OpenRouter + catalog + non-chat filtering
+        sample_payload = {
+            "data": [
+                {"id": "text-embedding-3-small"},
+                {"id": "whisper-1"},
+                {"id": "qwen-plus"},
+                {"id": "custom-private-llm"},
+                {
+                    "id": "anthropic/claude-sonnet-4",
+                    "architecture": {"modality": "text+image->text"},
+                    "pricing": {"prompt": "0.000003", "completion": "0.000015"},
+                },
+            ]
+        }
+        with patch("backend.llm.gateway.httpx.AsyncClient", new=make_client_cls(sample_payload)):
+            r_models = await client.post(
+                "/api/settings/models",
+                json={
+                    "base_url": "https://openrouter.ai/api/v1",
+                    "api_key": "sk-test-models-1",
+                    "force_refresh": True,
+                },
+            )
+            assert r_models.status_code == 200
+            models = {m["id"]: m for m in r_models.json()["models"]}
+            assert "text-embedding-3-small" not in models
+            assert "whisper-1" not in models
+
+            assert models["qwen-plus"]["price_source"] == "catalog"
+            assert models["qwen-plus"]["input_price"] == 0.8
+            assert models["qwen-plus"]["output_price"] == 2.0
+
+            assert models["custom-private-llm"]["price_source"] == "manual"
+            assert models["custom-private-llm"]["input_price"] is None
+
+            claude = models["anthropic/claude-sonnet-4"]
+            assert claude["vision"] is True
+            assert claude["price_source"] == "api"
+            assert claude["input_price"] == round(0.000003 * 1_000_000 * USD_TO_CNY_RATE, 4)
+            assert claude["output_price"] == round(0.000015 * 1_000_000 * USD_TO_CNY_RATE, 4)
+
+        # Gemini "models/" prefix stripping
+        gemini_payload = {
+            "data": [
+                {"id": "models/gemini-2.5-flash"},
+                {"id": "models/gemini-2.5-pro"},
+            ]
+        }
+        with patch("backend.llm.gateway.httpx.AsyncClient", new=make_client_cls(gemini_payload)):
+            r_gem = await client.post(
+                "/api/settings/models",
+                json={
+                    "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+                    "api_key": "gem-test-key",
+                    "force_refresh": True,
+                },
+            )
+            assert r_gem.status_code == 200
+            gem_ids = [m["id"] for m in r_gem.json()["models"]]
+            assert "gemini-2.5-flash" in gem_ids
+            assert "gemini-2.5-pro" in gem_ids
+            assert all(not mid.startswith("models/") for mid in gem_ids)
+
+    # 2. Verify document-grounded _estimate_plan_metrics responds to chunk size & role pricing
+    sec_long = SectionNode(
+        section_id="sec_0001",
+        level=1,
+        title="技术实施详细方案",
+        breadcrumb="技术实施详细方案",
+        page_start=1,
+        page_end=10,
+        paragraphs=["测试技术响应内容。" * 200],
+        media_ids=["img_0001", "img_0002"],
+        char_count=1800,
+    )
+    ast = DocumentAST(
+        doc_id="est_doc",
+        filename="resp.docx",
+        file_type="docx",
+        doc_role="response",
+        source_path="/tmp/resp.docx",
+        file_size_bytes=2048,
+        total_pages=10,
+        sections=[sec_long],
+    )
+    items = [
+        ChecklistItem(
+            item_id="CHK-001",
+            order_index=0,
+            category="technical_scoring",
+            title="技术实施详细方案",
+            requirement_text="提供技术实施方案与系统架构",
+            requires_vision=True,
+            search_keywords=["技术实施"],
+            enabled=True,
+        )
+    ]
+
+    orig_settings = get_settings()
+    try:
+        mod_settings = orig_settings.model_copy(deep=True)
+        mod_settings.routes["text_worker"].input_price_per_m = 1.0
+        mod_settings.routes["text_worker"].output_price_per_m = 4.0
+        mod_settings.routes["vision_worker"].enabled = True
+        mod_settings.routes["vision_worker"].input_price_per_m = 2.0
+        mod_settings.routes["vision_worker"].output_price_per_m = 6.0
+        save_settings(mod_settings)
+
+        tok1, cost1, eta1 = _estimate_plan_metrics(items, ast)
+        assert tok1 > 1500
+        assert cost1 > 0
+        assert eta1 >= 8
+
+        # Doubling all worker prices roughly doubles cost while tokens remain unchanged
+        mod_settings.routes["text_worker"].input_price_per_m = 2.0
+        mod_settings.routes["text_worker"].output_price_per_m = 8.0
+        mod_settings.routes["vision_worker"].input_price_per_m = 4.0
+        mod_settings.routes["vision_worker"].output_price_per_m = 12.0
+        mod_settings.routes["report_assembler"].input_price_per_m *= 2
+        mod_settings.routes["report_assembler"].output_price_per_m *= 2
+        save_settings(mod_settings)
+
+        tok2, cost2, _ = _estimate_plan_metrics(items, ast)
+        assert tok2 == tok1
+        assert abs(cost2 - cost1 * 2) <= 0.002
+
+        # 3. Verify cached_tokens and direct usage.cost billing in chat_json
+        proj = create_project("计费精度测试")
+        mod_settings.providers[0].api_key = "sk-billing-test"
+        mod_settings.routes["text_worker"].provider_id = mod_settings.providers[0].id
+        mod_settings.routes["text_worker"].input_price_per_m = 2.0
+        mod_settings.routes["text_worker"].output_price_per_m = 8.0
+        save_settings(mod_settings)
+
+        fake_usage = types.SimpleNamespace(
+            prompt_tokens=10_000,
+            completion_tokens=1_000,
+            prompt_cache_hit_tokens=8_000,
+        )
+        fake_resp = types.SimpleNamespace(
+            choices=[types.SimpleNamespace(message=types.SimpleNamespace(content='{"ok": true}'))],
+            usage=fake_usage,
+        )
+        fake_create = AsyncMock(return_value=fake_resp)
+        fake_client = types.SimpleNamespace(
+            chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=fake_create))
+        )
+        with patch("backend.llm.gateway.AsyncOpenAI", return_value=fake_client):
+            await LLM_GATEWAY.chat_json(
+                project_id=proj.id,
+                role="text_worker",
+                system_prompt="sys",
+                user_prompt="usr",
+            )
+        from backend.db import aggregate_project_tokens
+
+        pt, ct, total_cost, _ = aggregate_project_tokens(proj.id)
+        assert pt == 10_000 and ct == 1_000
+        # 2000 uncached @ 2.0/M (=0.004) + 8000 cached @ 0.4/M (=0.0032) + 1000 out @ 8.0/M (=0.008) = 0.0152
+        assert abs(total_cost - 0.0152) < 1e-4
+
+        # Verify OpenRouter direct usage.cost USD -> CNY conversion
+        proj_or = create_project("网关直返费用测试")
+        or_prov = next(p for p in mod_settings.providers if p.id == "openrouter")
+        or_prov.api_key = "sk-or-test"
+        mod_settings.routes["text_worker"].provider_id = "openrouter"
+        save_settings(mod_settings)
+        fake_usage_or = types.SimpleNamespace(prompt_tokens=500, completion_tokens=100, cost=0.01)
+        fake_resp_or = types.SimpleNamespace(
+            choices=[types.SimpleNamespace(message=types.SimpleNamespace(content='{"ok": true}'))],
+            usage=fake_usage_or,
+        )
+        with patch(
+            "backend.llm.gateway.AsyncOpenAI",
+            return_value=types.SimpleNamespace(
+                chat=types.SimpleNamespace(
+                    completions=types.SimpleNamespace(create=AsyncMock(return_value=fake_resp_or))
+                )
+            ),
+        ):
+            await LLM_GATEWAY.chat_json(
+                project_id=proj_or.id,
+                role="text_worker",
+                system_prompt="sys",
+                user_prompt="usr",
+            )
+        _, _, or_cost, _ = aggregate_project_tokens(proj_or.id)
+        assert abs(or_cost - 0.01 * USD_TO_CNY_RATE) < 1e-4
+    finally:
+        save_settings(orig_settings)

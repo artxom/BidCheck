@@ -3,8 +3,97 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any
+
+USD_TO_CNY_RATE: float = 7.25
+
+NON_CHAT_MODEL_RE = re.compile(
+    r"(embedding|rerank|bge-|moderation|whisper|tts|cosyvoice|paraformer|sensevoice|dall-e|flux|stable-diffusion|wanx|cogview|sora)",
+    re.IGNORECASE,
+)
+
+# Reference CNY prices per 1M tokens (input, output). Specific patterns must precede general ones.
+MODEL_PRICING_RULES: list[tuple[re.Pattern[str], float, float]] = [
+    (re.compile(r"qwen-vl-max", re.I), 3.0, 9.0),
+    (re.compile(r"qwen-vl-plus", re.I), 1.5, 4.5),
+    (re.compile(r"qwen2\.5-vl-72b", re.I), 4.13, 4.13),
+    (re.compile(r"qwen-max", re.I), 2.4, 9.6),
+    (re.compile(r"qwen-plus", re.I), 0.8, 2.0),
+    (re.compile(r"qwen-turbo", re.I), 0.3, 0.6),
+    (re.compile(r"qwen2\.5-32b", re.I), 1.26, 1.26),
+    (re.compile(r"deepseek-(reasoner|r1)", re.I), 4.0, 16.0),
+    (re.compile(r"deepseek-(chat|v3)", re.I), 2.0, 8.0),
+    (re.compile(r"doubao.*vision", re.I), 3.0, 9.0),
+    (re.compile(r"doubao.*lite", re.I), 0.3, 0.6),
+    (re.compile(r"doubao.*pro", re.I), 0.8, 2.0),
+    (re.compile(r"glm-4v", re.I), 4.0, 4.0),
+    (re.compile(r"glm-4-flash", re.I), 0.1, 0.1),
+    (re.compile(r"glm-4-plus", re.I), 5.0, 5.0),
+    (re.compile(r"moonshot-v1", re.I), 12.0, 12.0),
+    (re.compile(r"gpt-4\.1-mini", re.I), 2.9, 11.6),
+    (re.compile(r"gpt-4\.1", re.I), 14.5, 58.0),
+    (re.compile(r"gpt-4o-mini", re.I), 1.1, 4.4),
+    (re.compile(r"gpt-4o", re.I), 18.0, 72.0),
+    (re.compile(r"(o3-mini|o4-mini)", re.I), 8.0, 32.0),
+    (re.compile(r"\bo3\b", re.I), 14.5, 58.0),
+    (re.compile(r"\bo1\b", re.I), 108.0, 435.0),
+    (re.compile(r"gemini-2\.5-pro", re.I), 9.0, 72.0),
+    (re.compile(r"gemini-2\.5-flash", re.I), 1.1, 4.4),
+    (re.compile(r"gemini-2\.0-flash", re.I), 0.75, 3.0),
+    (re.compile(r"claude-opus-4", re.I), 108.0, 540.0),
+    (re.compile(r"claude-(sonnet-4|3-7-sonnet|3-5-sonnet)", re.I), 21.6, 108.0),
+    (re.compile(r"claude-3-5-haiku", re.I), 5.8, 29.0),
+]
+
+
+def lookup_model_pricing(model_id: str) -> tuple[float, float] | None:
+    """Return reference (input_price_per_m, output_price_per_m) in CNY if matched, else None."""
+    mid = (model_id or "").strip()
+    if not mid:
+        return None
+    for pattern, in_price, out_price in MODEL_PRICING_RULES:
+        if pattern.search(mid):
+            return in_price, out_price
+    return None
+
+
+def infer_vision_capability(model_id: str, raw_item: dict[str, Any] | None = None) -> bool:
+    """Detect whether a model supports image inputs from provider metadata or model ID conventions."""
+    if raw_item and isinstance(raw_item, dict):
+        arch = raw_item.get("architecture")
+        if isinstance(arch, dict):
+            modality = str(arch.get("modality", "")).lower()
+            if "image" in modality:
+                return True
+            input_mods = arch.get("input_modalities")
+            if isinstance(input_mods, list) and any("image" in str(m).lower() for m in input_mods):
+                return True
+        input_mods_top = raw_item.get("input_modalities")
+        if isinstance(input_mods_top, list) and any("image" in str(m).lower() for m in input_mods_top):
+            return True
+        caps = raw_item.get("capabilities")
+        if isinstance(caps, dict) and caps.get("vision") is True:
+            return True
+
+    mid = (model_id or "").lower()
+    return any(
+        tok in mid
+        for tok in (
+            "vl",
+            "vision",
+            "qvq",
+            "glm-4v",
+            "pixtral",
+            "gpt-4o",
+            "gpt-4.1",
+            "gemini-",
+            "claude-3",
+            "claude-sonnet-4",
+            "claude-opus-4",
+        )
+    )
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("BIDGUARD_DATA_DIR", str(BASE_DIR / "data")))

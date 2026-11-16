@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import re
 import time
@@ -11,8 +12,15 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
+import httpx
 from openai import AsyncOpenAI
 
+from backend.config import (
+    NON_CHAT_MODEL_RE,
+    USD_TO_CNY_RATE,
+    infer_vision_capability,
+    lookup_model_pricing,
+)
 from backend.db import (
     aggregate_project_tokens,
     get_project,
@@ -114,6 +122,7 @@ class ProjectEventBus:
         completed_items: int | None = None,
         total_items: int | None = None,
         estimated_plan_tokens: int | None = None,
+        estimated_plan_cost: float | None = None,
         estimated_plan_seconds: int | None = None,
     ) -> TelemetrySnapshot:
         proj = get_project(project_id)
@@ -129,6 +138,8 @@ class ProjectEventBus:
             cur.total_items = total_items
         if estimated_plan_tokens is not None:
             cur.estimated_plan_tokens = estimated_plan_tokens
+        if estimated_plan_cost is not None:
+            cur.estimated_plan_cost = estimated_plan_cost
         if estimated_plan_seconds is not None:
             cur.estimated_plan_seconds = estimated_plan_seconds
 
@@ -175,8 +186,11 @@ EVENT_BUS = ProjectEventBus()
 class LLMGateway:
     """Unified multi-provider OpenAI-compatible client with 4-role routing, concurrency limiting & retries."""
 
+    _MODELS_CACHE_TTL = 300.0
+
     def __init__(self) -> None:
         self._semaphores: dict[tuple[str, int], asyncio.Semaphore] = {}
+        self._models_cache: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
 
     def _get_semaphore(self, role: str, limit: int) -> asyncio.Semaphore:
         eff_limit = max(1, min(32, limit))
@@ -271,17 +285,56 @@ class LLMGateway:
                         duration_ms = int((time.perf_counter() - t0) * 1000)
 
                         raw_content = resp.choices[0].message.content or ""
-                        p_tok = int(getattr(resp.usage, "prompt_tokens", 0) or 0)
-                        c_tok = int(getattr(resp.usage, "completion_tokens", 0) or 0)
+                        usage = getattr(resp, "usage", None)
+                        p_tok = int(getattr(usage, "prompt_tokens", 0) or 0)
+                        c_tok = int(getattr(usage, "completion_tokens", 0) or 0)
                         if p_tok == 0 and c_tok == 0:
                             # Fallback estimation if a third-party proxy omits usage object
                             p_tok = max(100, len(system_prompt + user_prompt) // 2 + (len(image_paths or []) * 750))
                             c_tok = max(30, len(raw_content) // 2)
 
-                        cost = (
-                            (p_tok / 1_000_000.0) * route.input_price_per_m
-                            + (c_tok / 1_000_000.0) * route.output_price_per_m
-                        )
+                        cached_tok = 0
+                        if usage is not None:
+                            raw_hit = getattr(usage, "prompt_cache_hit_tokens", None)
+                            if raw_hit is None:
+                                details = getattr(usage, "prompt_tokens_details", None)
+                                if isinstance(details, dict):
+                                    raw_hit = details.get("cached_tokens")
+                                elif details is not None:
+                                    raw_hit = getattr(details, "cached_tokens", None)
+                            if raw_hit is not None:
+                                try:
+                                    cached_tok = max(0, min(p_tok, int(raw_hit)))
+                                except (TypeError, ValueError):
+                                    cached_tok = 0
+
+                        direct_cost = None
+                        if usage is not None:
+                            direct_cost = getattr(usage, "cost", None)
+                            if direct_cost is None:
+                                extra = getattr(usage, "model_extra", None)
+                                if isinstance(extra, dict):
+                                    direct_cost = extra.get("cost")
+
+                        cost: float | None = None
+                        if direct_cost is not None:
+                            try:
+                                parsed_cost = float(direct_cost)
+                                if parsed_cost >= 0:
+                                    if provider.id == "openrouter" or provider.currency.upper() == "USD":
+                                        cost = parsed_cost * USD_TO_CNY_RATE
+                                    else:
+                                        cost = parsed_cost
+                            except (TypeError, ValueError):
+                                cost = None
+
+                        if cost is None:
+                            uncached_tok = max(0, p_tok - cached_tok)
+                            cost = (
+                                (uncached_tok * route.input_price_per_m)
+                                + (cached_tok * route.input_price_per_m * 0.2)
+                                + (c_tok * route.output_price_per_m)
+                            ) / 1_000_000.0
                         record_token_usage(
                             project_id=project_id,
                             agent_role=role,
@@ -302,6 +355,113 @@ class LLMGateway:
             finally:
                 EVENT_BUS.mark_call_delta(project_id, role, -1)
                 await EVENT_BUS.sync_and_broadcast_telemetry(project_id)
+
+    async def list_models(
+        self, base_url: str, api_key: str, force_refresh: bool = False
+    ) -> list[dict[str, Any]]:
+        """Fetch live model inventory from provider's OpenAI-compatible /models endpoint."""
+        clean_base = base_url.strip().rstrip("/")
+        clean_key = api_key.strip()
+        if not clean_base or not clean_key:
+            raise ValueError("请先配置 Base URL 与 API Key")
+
+        key_hash = hashlib.sha256(clean_key.encode("utf-8")).hexdigest()[:16]
+        cache_key = (clean_base, key_hash)
+        now_ts = time.monotonic()
+        if not force_refresh and cache_key in self._models_cache:
+            cached_ts, cached_list = self._models_cache[cache_key]
+            if now_ts - cached_ts < self._MODELS_CACHE_TTL:
+                return cached_list
+
+        url = f"{clean_base}/models"
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            resp = await client.get(
+                url,
+                headers={
+                    "Authorization": f"Bearer {clean_key}",
+                    "Accept": "application/json",
+                },
+            )
+
+        if resp.status_code >= 400:
+            raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:160]}")
+
+        try:
+            payload = resp.json()
+        except Exception as exc:
+            raise RuntimeError(f"模型列表接口返回非 JSON 内容：{str(exc)[:100]}") from exc
+
+        if isinstance(payload, dict):
+            raw_list = payload.get("data")
+            if raw_list is None:
+                raw_list = payload.get("models")
+        elif isinstance(payload, list):
+            raw_list = payload
+        else:
+            raw_list = None
+
+        if not isinstance(raw_list, list):
+            raise RuntimeError("模型列表接口返回结构异常（缺少 data 列表）")
+
+        is_google_endpoint = "generativelanguage.googleapis.com" in clean_base.lower()
+
+        def _parse_entry(item: Any) -> dict[str, Any] | None:
+            raw_id = ""
+            raw_dict: dict[str, Any] | None = None
+            if isinstance(item, dict):
+                raw_dict = item
+                raw_id = str(item.get("id") or item.get("name") or "").strip()
+            elif isinstance(item, str):
+                raw_id = item.strip()
+            if not raw_id:
+                return None
+
+            model_id = raw_id[len("models/") :] if (is_google_endpoint and raw_id.startswith("models/")) else raw_id
+
+            in_price: float | None = None
+            out_price: float | None = None
+            price_source = "manual"
+
+            if raw_dict and isinstance(raw_dict.get("pricing"), dict):
+                pricing = raw_dict["pricing"]
+                try:
+                    p_in = float(pricing.get("prompt"))
+                    p_out = float(pricing.get("completion"))
+                    if 0.0 <= p_in < 0.05 and 0.0 <= p_out < 0.05:
+                        in_price = round(p_in * 1_000_000 * USD_TO_CNY_RATE, 4)
+                        out_price = round(p_out * 1_000_000 * USD_TO_CNY_RATE, 4)
+                        price_source = "api"
+                except (TypeError, ValueError):
+                    pass
+
+            if price_source == "manual":
+                ref_price = lookup_model_pricing(model_id)
+                if ref_price is not None:
+                    in_price, out_price = ref_price
+                    price_source = "catalog"
+
+            return {
+                "id": model_id,
+                "vision": infer_vision_capability(model_id, raw_dict),
+                "input_price": in_price,
+                "output_price": out_price,
+                "price_source": price_source,
+            }
+
+        all_parsed: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for entry in raw_list:
+            parsed_entry = _parse_entry(entry)
+            if parsed_entry and parsed_entry["id"] not in seen_ids:
+                seen_ids.add(parsed_entry["id"])
+                all_parsed.append(parsed_entry)
+
+        filtered = [m for m in all_parsed if not NON_CHAT_MODEL_RE.search(m["id"])]
+        final_models = filtered if filtered else all_parsed
+        final_models.sort(key=lambda m: m["id"].lower())
+
+        self._models_cache[cache_key] = (now_ts, final_models)
+        return final_models
 
     async def test_connection(self, base_url: str, api_key: str, model: str) -> dict[str, Any]:
         """Lightweight live connectivity test for Settings modal."""

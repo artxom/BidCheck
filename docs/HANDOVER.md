@@ -2,7 +2,7 @@
 
 > **文档定位**：本文件为项目的**权威工程交接基准（Single Source of Truth）**。依据项目维护铁律，**每次阶段性开发或优化执行完毕后，必须通过全部自动化测试、同步更新本交接文档的架构说明与第八章《里程碑交接台账》，并提交同步至 GitHub 远端仓库。**
 
-- **当前版本**：`v0.2.0`
+- **当前版本**：`v0.3.0`
 - **主干分支**：`main`
 - **技术栈**：Python 3.11+ / FastAPI / SQLite (WAL) / lxml / PyMuPDF / AsyncOpenAI + React 19 / TypeScript / Vite 6 / Tailwind CSS v4
 
@@ -57,15 +57,15 @@
 | 路径 | 核心职责 |
 | :--- | :--- |
 | `backend/main.py` | FastAPI 生命周期初始化、CORS、挂载四大 API 路由及托管 `frontend/dist` 单页应用 |
-| `backend/config.py` | 运行时目录定义、8 家主流模型供应商预设（百炼/DeepSeek/豆包/硅基/OpenAI/Gemini/OpenRouter/自定义）与四角色定义 |
-| `backend/schemas.py` | Pydantic 核心契约（`AppSettings`、`ChecklistItem`、`TelemetrySnapshot`、`InspectionReport`、`ProjectDetail`） |
+| `backend/config.py` | 运行时目录定义、8 家主流模型供应商预设、参考单价目录（`MODEL_PRICING_RULES`）、视觉能力推断（`infer_vision_capability`）与四角色定义 |
+| `backend/schemas.py` | Pydantic 核心契约（`AppSettings`、`ChecklistItem`、`TelemetrySnapshot` 含 `estimated_plan_cost`、`InspectionReport`、`ProjectDetail`） |
 | `backend/db.py` | SQLite WAL 连接池锁管理、项目 CRUD、检查项断点持久化、会话历史与 `token_ledger` 聚合统计 |
 | `backend/parsers/docx_parser.py` | 原生 OOXML 流式解析段落/表格/`<a:blip>` 图片引用，结合目录 `PAGEREF` 书签映射精准页码，支持 `.tiff`/`.png` 懒转码压缩 JPEG |
 | `backend/parsers/pdf_parser.py` | 基于 PyMuPDF (`fitz`) 的 PDF 书签大纲/字号启发式分章、文本表格提取与内嵌图按需转码 |
 | `backend/parsers/indexer.py` | 封面/标段元数据提取、6 类零 Token 确定性红线扫描器、`SectionRetriever` 混合检索器、AST 磁盘缓存 |
-| `backend/llm/gateway.py` | `LLMGateway`（四角色路由、信号量限流、推理模型无 `temperature` 兼容、`<think>` 剥离与容错 JSON 解析）与 `ProjectEventBus`（SSE 广播与 ETA 计算） |
+| `backend/llm/gateway.py` | `LLMGateway`（四角色路由、`/models` 动态模型拉取与 5 分钟缓存、`cached_tokens`/`usage.cost` 精准计费、信号量限流、容错 JSON 解析）与 `ProjectEventBus` |
 | `backend/llm/prompts.py` | 针对中国大陆招投标定制的四角色 System Prompts（规划、文本核查、视觉验图、报告总装、会话控制） |
-| `backend/agents/master_agent.py` | 双文档规划拆解、强制注入全局红线核查项、自然语言意图分发（裁剪清单/切换标段/启动复检） |
+| `backend/agents/master_agent.py` | 双文档规划拆解、基于真实检索章节字数与角色单价的 `_estimate_plan_metrics` 预估、强制注入全局红线核查项、自然语言意图分发 |
 | `backend/agents/worker_engine.py` | 异步并发逐项核查、确定性致命占位符强制降级硬锁（防误判 `passed`）、按需多模态验图 |
 | `backend/agents/report_agent.py` | 全局响应统计、就绪度评分计算、封标风险结论汇编（含无 API 异常时的确定性兜底报告） |
 | `backend/exporters/docx_exporter.py` | 使用 `python-docx` 生成正式排版 Word 核查报告（总体结论、优先整改、固有预警、逐项明细表） |
@@ -80,14 +80,14 @@
 | `frontend/src/theme.ts` | `useTheme` 状态钩子：管理 `light` / `dark` / `system` 三态、`localStorage` 持久化与系统 `prefers-color-scheme` 实时监听 |
 | `frontend/src/index.css` | Tailwind v4 `@custom-variant dark` 类驱动声明及 macOS 材质样式体系（`.macos-toolbar`、`.macos-sidebar`、`.macos-card`、`.macos-popover`、`.macos-segmented` 等） |
 | `frontend/src/App.tsx` | 全局三栏布局状态编排、每个活跃项目的 `EventSource` 实时事件订阅、全局快捷键（`⌘,`、`⌘\`） |
-| `frontend/src/components/TopToolbar.tsx` | 顶栏：侧栏开关、项目与标段徽章、居中实时遥测胶囊与模型用量浮层、导出菜单、深浅色一键切换、设置入口 |
+| `frontend/src/components/TopToolbar.tsx` | 顶栏：侧栏开关、项目与标段徽章、居中实时遥测胶囊与模型用量/计划预估浮层、导出菜单、深浅色一键切换、设置入口 |
 | `frontend/src/components/Sidebar.tsx` | 左栏：macOS Source List 风格项目列表、状态指示点、缓存占用展示与一键清理 |
 | `frontend/src/components/MasterChatPane.tsx` | 中栏：双文档拖拽/本地样本挂载槽、Master 极简会话流、内联操作卡片与指令输入栏 |
 | `frontend/src/components/InspectorPane.tsx` | 右栏容器：`实况` / `报告` / `原文` 三段式 macOS 分段控制器 |
 | `frontend/src/components/LiveRunView.tsx` | 实况视图：可折叠形式预警卡片、五大维度分组清单、自定义 macOS 复选框与实时核查状态 |
 | `frontend/src/components/ReportView.tsx` | 报告视图：封标结论与就绪度评分卡、四宫格统计、优先整改项、多维筛选胶囊与整改建议 |
 | `frontend/src/components/EvidenceView.tsx` | 原文视图：条款对照卡、章节快速跳转、原文段落/空单元格高亮表格、扫描件画廊与全屏灯箱（支持 `Esc` 关闭） |
-| `frontend/src/components/SettingsModal.tsx` | 设置面板：供应商密钥配置、一键连通性测试、四角色模型/并发/单价路由、底部外观三态切换器 |
+| `frontend/src/components/SettingsModal.tsx` | 设置面板：供应商密钥、`/models` API 实时模型列表拉取与可搜索选择器、四角色模型/并发/自动单价联动、底部外观三态切换器 |
 
 ---
 
@@ -127,6 +127,7 @@
 | `GET` | `/api/projects/{id}/media/{media_id}` | 按需转码并返回章节内嵌扫描件 JPEG |
 | `GET` | `/api/projects/{id}/export/docx` \| `/xlsx` | 导出 Word 核查报告 / Excel 整改销项表 |
 | `GET / PUT` | `/api/settings` | 读取 / 保存供应商密钥与四角色路由配置 |
+| `POST` | `/api/settings/models` | 调用供应商 OpenAI 兼容 `/models` 接口动态拉取可用模型清单、视觉能力标识与参考单价 |
 | `POST` | `/api/settings/test` \| `/clear-cache` | 测试模型连通性 / 清理图片与导出缓存 |
 
 ---
@@ -252,6 +253,25 @@ git log --oneline -n 5
 ---
 
 ## 八、里程碑交接台账（Milestone Handover Log）
+
+### Milestone 3 — `v0.3.0`（2026-11-16）
+- **阶段目标**：将设置面板的模型选择升级为通过供应商 `/models` API 动态拉取实时清单并自动联动单价，同时把执行前预估升级为基于真实文档检索分块与角色单价的精确测算，并加固缓存命中与直返费用计费精度。
+- **核心变更内容**：
+  1. **动态模型列表 API 接入**：在 `backend/llm/gateway.py` 新增 `LLMGateway.list_models`（5 分钟 TTL 内存缓存、自动剥离 Gemini `models/` 前缀、过滤 embedding/whisper 等非对话模型、解析 OpenRouter `pricing` 或内置参考单价目录 `MODEL_PRICING_RULES`、推断多模态 `VL` 视觉支持），并暴露 `POST /api/settings/models` 接口。
+  2. **macOS 可搜索模型选择器与单价联动**：重构 `frontend/src/components/SettingsModal.tsx`，在「供应商」页提供基于实时 API 模型列表的下拉测试选择器与状态反馈；在「模型路由」页实现带搜索过滤、自适应上下防裁切弹向（第 3、4 角色向上展开）、`VL` 视觉置顶标记、自定义接入点兜底及选中模型自动回填输入/输出单价。
+  3. **Token 与费用测算/计费精度升级**：在 `backend/schemas.py` 新增 `TelemetrySnapshot.estimated_plan_cost`；在 `backend/agents/master_agent.py` 实现 `_estimate_plan_metrics`，依据响应文件实际命中的候选章节字符数、扫描件图片数与四角色绑定单价计算执行前预估费用及耗时，并在 `TopToolbar` 用量浮层与规划卡片中展示；在 `LLMGateway.chat_json` 中新增 `cached_tokens` / `prompt_cache_hit_tokens` 缓存命中折扣与 `usage.cost` 网关实扣金额识别。
+- **涉及主要文件**：
+  - 后端：`backend/config.py`、`backend/schemas.py`、`backend/llm/gateway.py`、`backend/routers/settings.py`、`backend/routers/projects.py`、`backend/agents/master_agent.py`
+  - 前端：`frontend/src/types.ts`、`frontend/src/api.ts`、`frontend/src/components/SettingsModal.tsx`、`frontend/src/components/TopToolbar.tsx`
+  - 文档与测试：`docs/HANDOVER.md`、`tests/test_ui_and_handover.py`
+- **验证记录**：
+  - `(cd frontend && npm run build)` 类型检查与 Vite 生产编译零错误通过
+  - `.venv/bin/pytest -v` 7 项全量自动化测试通过（新增动态模型拉取过滤/价格解析、分块费用预估、缓存命中计费测试）
+  - 重启本地 `127.0.0.1:8000` 服务并验证 `/api/health`、`POST /api/settings/models` 契约与页面静态加载
+- **已知边界与下一阶段建议**：
+  - 国内部分中转网关或私有部署端点若不实现标准 `/models` 或不返回 `pricing` 字段，选择器会自动保留输入自定义模型 ID 能力，单价框支持用户按实际协议折扣微调。
+
+---
 
 ### Milestone 2 — `v0.2.0`（2026-11-16）
 - **阶段目标**：精简全站冗余提示文案，升级原生 macOS 视觉层次与操控质感，支持深色模式（Dark Mode），建立严格的工程交接文档体系与 GitHub 同步规程。

@@ -7,6 +7,7 @@ import type {
   ProjectDetail,
   ProjectListItem,
   ProviderPreset,
+  RemoteModelInfo,
   RoleDefinition,
   SectionDetail,
   WorkspaceSample,
@@ -133,6 +134,18 @@ export const api = {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settings),
+    }),
+
+  fetchModels: (payload: {
+    provider_id?: string;
+    base_url: string;
+    api_key: string;
+    force_refresh?: boolean;
+  }) =>
+    requestJson<{ models: RemoteModelInfo[]; count: number }>('/api/settings/models', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     }),
 
   testConnection: (baseUrl: string, apiKey: string, model: string) =>

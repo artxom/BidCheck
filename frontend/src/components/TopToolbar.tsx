@@ -271,6 +271,16 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
                   ))}
                 </div>
               )}
+
+              {telemetry.estimated_plan_tokens > 0 && (
+                <div className="mt-2.5 pt-2 border-t border-black/[0.06] dark:border-white/[0.08] flex items-center justify-between text-[11px] text-[#8E8E93] tabular-nums">
+                  <span>计划预估</span>
+                  <span>
+                    ~{formatTokens(telemetry.estimated_plan_tokens)} · ~
+                    {formatCost(telemetry.estimated_plan_cost ?? 0)}
+                  </span>
+                </div>
+              )}
             </div>
           )}
         </div>

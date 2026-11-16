@@ -1,11 +1,25 @@
-import React, { useState, useEffect } from 'react';
-import { X, Check, Loader2, Wifi, Plus, Eye, EyeOff, Sun, Moon, Monitor } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  X,
+  Check,
+  Loader2,
+  Wifi,
+  Plus,
+  Eye,
+  EyeOff,
+  Sun,
+  Moon,
+  Monitor,
+  RefreshCw,
+  ChevronsUpDown,
+  Search,
+} from 'lucide-react';
 import { api } from '../api';
 import type { ThemeMode } from '../theme';
 import type {
   AppSettings,
   ProviderConfig,
-  ProviderPreset,
+  RemoteModelInfo,
   RoleDefinition,
   RoleRouteConfig,
 } from '../types';
@@ -17,6 +31,245 @@ interface SettingsModalProps {
   onChangeThemeMode: (mode: ThemeMode) => void;
 }
 
+interface ModelPickerProps {
+  roleIndex: number;
+  provider: ProviderConfig | undefined;
+  currentModel: string;
+  models: RemoteModelInfo[];
+  loading: boolean;
+  error: string;
+  isVisionRole: boolean;
+  isOpen: boolean;
+  onToggleOpen: () => void;
+  onClosePopover: () => void;
+  onRefresh: () => void;
+  onSelectModel: (modelId: string, remoteInfo?: RemoteModelInfo) => void;
+  onGoConfigureKey: () => void;
+}
+
+const ModelPicker: React.FC<ModelPickerProps> = ({
+  roleIndex,
+  provider,
+  currentModel,
+  models,
+  loading,
+  error,
+  isVisionRole,
+  isOpen,
+  onToggleOpen,
+  onClosePopover,
+  onRefresh,
+  onSelectModel,
+  onGoConfigureKey,
+}) => {
+  const [query, setQuery] = useState('');
+  const boxRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setQuery('');
+      return;
+    }
+    const timer = setTimeout(() => searchRef.current?.focus(), 20);
+    const handleOutside = (e: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) {
+        onClosePopover();
+      }
+    };
+    window.addEventListener('mousedown', handleOutside);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('mousedown', handleOutside);
+    };
+  }, [isOpen, onClosePopover]);
+
+  const hasKey = Boolean(provider?.api_key.trim() && provider?.base_url.trim());
+  const matchedRemote = models.find((m) => m.id === currentModel);
+
+  const q = query.trim().toLowerCase();
+  const ordered = isVisionRole
+    ? [...models].sort((a, b) => Number(b.vision) - Number(a.vision) || a.id.localeCompare(b.id))
+    : models;
+  const filtered = q ? ordered.filter((m) => m.id.toLowerCase().includes(q)) : ordered;
+  const exactMatch = q ? models.some((m) => m.id.toLowerCase() === q) : true;
+  const openUpward = roleIndex >= 2;
+
+  return (
+    <div ref={boxRef} className="relative">
+      <div className="flex items-center justify-between mb-0.5">
+        <label className="text-[10.5px] text-[#8E8E93]">模型</label>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={loading || !hasKey}
+          title="从 API 刷新模型列表"
+          className="text-[10px] text-[#8E8E93] hover:text-[#007AFF] dark:hover:text-[#409CFF] disabled:opacity-40 flex items-center gap-0.5 transition-colors"
+        >
+          <RefreshCw className={`w-2.5 h-2.5 ${loading ? 'animate-spin' : ''}`} />
+          <span>刷新</span>
+        </button>
+      </div>
+
+      <button
+        type="button"
+        onClick={onToggleOpen}
+        className="w-full h-[30px] rounded-[6px] macos-input px-2 text-left flex items-center justify-between gap-1.5 text-[12px] text-[#1D1D1F] dark:text-[#F5F5F7] outline-none"
+      >
+        <span className="flex items-center gap-1 min-w-0 flex-1">
+          <span className="truncate font-mono">{currentModel || '选择模型'}</span>
+          {matchedRemote?.vision && (
+            <span className="px-1 py-[0.5px] rounded-[3px] bg-[#007AFF]/12 dark:bg-[#0A84FF]/20 text-[#007AFF] dark:text-[#409CFF] text-[9.5px] font-semibold shrink-0">
+              VL
+            </span>
+          )}
+        </span>
+        <ChevronsUpDown className="w-3 h-3 text-[#8E8E93] shrink-0" />
+      </button>
+
+      {isOpen && (
+        <div
+          className={`absolute left-0 ${
+            openUpward ? 'bottom-full mb-1' : 'top-full mt-1'
+          } w-[310px] max-w-[80vw] rounded-[10px] macos-popover p-1.5 z-50`}
+        >
+          <div className="flex items-center gap-1.5 px-2 h-[28px] rounded-[6px] macos-input mb-1.5">
+            <Search className="w-3 h-3 text-[#8E8E93] shrink-0" />
+            <input
+              ref={searchRef}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && query.trim()) {
+                  e.preventDefault();
+                  const first = filtered[0];
+                  if (first && exactMatch) {
+                    onSelectModel(first.id, first);
+                  } else if (first && filtered.length === 1) {
+                    onSelectModel(first.id, first);
+                  } else {
+                    onSelectModel(query.trim());
+                  }
+                  onClosePopover();
+                } else if (e.key === 'Escape') {
+                  e.stopPropagation();
+                  onClosePopover();
+                }
+              }}
+              placeholder="搜索模型或输入接入点…"
+              className="flex-1 min-w-0 bg-transparent text-[11.5px] text-[#1D1D1F] dark:text-[#F5F5F7] placeholder:text-[#8E8E93] outline-none font-mono"
+            />
+          </div>
+
+          {!hasKey ? (
+            <div className="py-3 px-2 text-center space-y-2">
+              <div className="text-[11.5px] text-[#8E8E93]">未配置供应商密钥</div>
+              <button
+                type="button"
+                onClick={() => {
+                  onClosePopover();
+                  onGoConfigureKey();
+                }}
+                className="h-[26px] px-3 rounded-[6px] macos-btn-primary text-[11.5px] font-medium"
+              >
+                先去配置 API Key
+              </button>
+            </div>
+          ) : loading && models.length === 0 ? (
+            <div className="py-4 flex items-center justify-center gap-1.5 text-[11.5px] text-[#8E8E93]">
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-[#007AFF] dark:text-[#0A84FF]" />
+              <span>拉取模型列表…</span>
+            </div>
+          ) : error && models.length === 0 ? (
+            <div className="py-2.5 px-2 space-y-2 text-center">
+              <div className="text-[11px] text-[#DC2626] dark:text-[#FF6961] break-words">
+                {error}
+              </div>
+              <button
+                type="button"
+                onClick={onRefresh}
+                className="h-[24px] px-2.5 rounded-[5px] macos-btn-secondary text-[11px] text-[#1D1D1F] dark:text-[#F5F5F7]"
+              >
+                重试
+              </button>
+            </div>
+          ) : (
+            <div className="max-h-[168px] overflow-y-auto space-y-0.5">
+              {filtered.map((m) => {
+                const selected = m.id === currentModel;
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => {
+                      onSelectModel(m.id, m);
+                      onClosePopover();
+                    }}
+                    className={`w-full text-left px-2 py-1.5 rounded-[6px] text-[11.5px] flex items-center justify-between gap-2 transition-colors ${
+                      selected
+                        ? 'bg-[#007AFF] dark:bg-[#0A84FF] text-white'
+                        : 'text-[#1D1D1F] dark:text-[#F5F5F7] hover:bg-black/[0.05] dark:hover:bg-white/[0.08]'
+                    }`}
+                  >
+                    <span className="flex items-center gap-1.5 min-w-0 flex-1">
+                      <Check
+                        className={`w-3 h-3 shrink-0 ${
+                          selected ? 'opacity-100' : 'opacity-0'
+                        }`}
+                      />
+                      <span className="truncate font-mono">{m.id}</span>
+                    </span>
+
+                    <span className="flex items-center gap-1 shrink-0">
+                      {m.vision && (
+                        <span
+                          className={`px-1 py-[0.5px] rounded-[3px] text-[9.5px] font-semibold ${
+                            selected
+                              ? 'bg-white/20 text-white'
+                              : 'bg-[#007AFF]/12 dark:bg-[#0A84FF]/20 text-[#007AFF] dark:text-[#409CFF]'
+                          }`}
+                        >
+                          VL
+                        </span>
+                      )}
+                      {m.input_price !== null && m.output_price !== null && (
+                        <span
+                          className={`text-[10px] tabular-nums ${
+                            selected ? 'text-white/80' : 'text-[#8E8E93]'
+                          }`}
+                        >
+                          ¥{m.input_price}/{m.output_price}
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                );
+              })}
+
+              {!exactMatch && query.trim() && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSelectModel(query.trim());
+                    onClosePopover();
+                  }}
+                  className="w-full text-left px-2 py-1.5 rounded-[6px] text-[11.5px] text-[#007AFF] dark:text-[#409CFF] hover:bg-[#007AFF]/10 dark:hover:bg-[#0A84FF]/15 font-mono truncate"
+                >
+                  使用 &ldquo;{query.trim()}&rdquo;
+                </button>
+              )}
+
+              {filtered.length === 0 && !query.trim() && (
+                <div className="py-3 text-center text-[11.5px] text-[#8E8E93]">暂无可用模型</div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   open,
   onClose,
@@ -25,7 +278,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 }) => {
   const [tab, setTab] = useState<'providers' | 'routes'>('providers');
   const [settings, setSettings] = useState<AppSettings | null>(null);
-  const [presets, setPresets] = useState<ProviderPreset[]>([]);
   const [roles, setRoles] = useState<RoleDefinition[]>([]);
   const [selectedProvId, setSelectedProvId] = useState<string>('dashscope');
   const [showKey, setShowKey] = useState(false);
@@ -35,14 +287,53 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [testModel, setTestModel] = useState('');
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
+  const [modelsByProv, setModelsByProv] = useState<Record<string, RemoteModelInfo[]>>({});
+  const [loadingProv, setLoadingProv] = useState<Record<string, boolean>>({});
+  const [provModelErr, setProvModelErr] = useState<Record<string, string>>({});
+  const [openPickerRole, setOpenPickerRole] = useState<string | null>(null);
+
+  const loadModelsForProvider = useCallback(
+    async (prov: ProviderConfig, forceRefresh = false) => {
+      const base = prov.base_url.trim();
+      const key = prov.api_key.trim();
+      if (!base || !key) return;
+
+      setLoadingProv((prev) => ({ ...prev, [prov.id]: true }));
+      setProvModelErr((prev) => ({ ...prev, [prov.id]: '' }));
+      try {
+        const res = await api.fetchModels({
+          provider_id: prov.id,
+          base_url: base,
+          api_key: key,
+          force_refresh: forceRefresh,
+        });
+        setModelsByProv((prev) => ({ ...prev, [prov.id]: res.models }));
+      } catch (err) {
+        setProvModelErr((prev) => ({
+          ...prev,
+          [prov.id]: err instanceof Error ? err.message : '拉取失败',
+        }));
+      } finally {
+        setLoadingProv((prev) => ({ ...prev, [prov.id]: false }));
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setOpenPickerRole(null);
+      return;
+    }
     api.getSettings().then((res) => {
       setSettings(res.settings);
-      setPresets(res.presets);
       setRoles(res.roles);
       if (res.settings.providers.length > 0) {
-        setSelectedProvId(res.settings.providers[0].id);
+        const firstProv = res.settings.providers[0];
+        setSelectedProvId(firstProv.id);
+        if (firstProv.api_key.trim() && firstProv.base_url.trim()) {
+          loadModelsForProvider(firstProv);
+        }
       }
     });
 
@@ -51,13 +342,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  }, [open, onClose, loadModelsForProvider]);
+
+  // Auto-fetch model lists for configured providers when switching to routes tab
+  useEffect(() => {
+    if (!open || !settings || tab !== 'routes') return;
+    for (const p of settings.providers) {
+      if (
+        p.api_key.trim() &&
+        p.base_url.trim() &&
+        !modelsByProv[p.id] &&
+        !loadingProv[p.id] &&
+        !provModelErr[p.id]
+      ) {
+        loadModelsForProvider(p);
+      }
+    }
+  }, [open, tab, settings, modelsByProv, loadingProv, provModelErr, loadModelsForProvider]);
 
   if (!open || !settings) return null;
 
   const activeProv =
     settings.providers.find((p) => p.id === selectedProvId) || settings.providers[0];
-  const activePreset = presets.find((p) => p.id === activeProv?.id);
+  const activeModels = activeProv ? modelsByProv[activeProv.id] || [] : [];
+  const activeModelLoading = activeProv ? Boolean(loadingProv[activeProv.id]) : false;
+  const activeModelErr = activeProv ? provModelErr[activeProv.id] || '' : '';
 
   const updateProvider = (patch: Partial<ProviderConfig>) => {
     if (!activeProv) return;
@@ -68,6 +377,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       ),
     });
     setTestResult(null);
+  };
+
+  const handleSelectProvider = (prov: ProviderConfig) => {
+    setSelectedProvId(prov.id);
+    setTestResult(null);
+    setTestModel('');
+    if (
+      prov.api_key.trim() &&
+      prov.base_url.trim() &&
+      !modelsByProv[prov.id] &&
+      !loadingProv[prov.id]
+    ) {
+      loadModelsForProvider(prov);
+    }
   };
 
   const addCustomProvider = () => {
@@ -82,6 +405,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     };
     setSettings({ ...settings, providers: [...settings.providers, newProv] });
     setSelectedProvId(newId);
+    setTestModel('');
+    setTestResult(null);
   };
 
   const updateRoute = (roleKey: string, patch: Partial<RoleRouteConfig>) => {
@@ -108,17 +433,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
+  const effectiveTestModel =
+    (activeModels.length > 0 && activeModels.some((m) => m.id === testModel)
+      ? testModel
+      : activeModels[0]?.id) ||
+    testModel.trim() ||
+    Object.values(settings.routes).find((r) => r.provider_id === activeProv?.id)?.model ||
+    '';
+
   const handleTest = async () => {
-    if (!activeProv) return;
-    const modelToTest =
-      testModel.trim() ||
-      activePreset?.suggested_models[0]?.id ||
-      Object.values(settings.routes).find((r) => r.provider_id === activeProv.id)?.model ||
-      'gpt-4o-mini';
+    if (!activeProv || !effectiveTestModel) return;
     setTesting(true);
     setTestResult(null);
     try {
-      const res = await api.testConnection(activeProv.base_url, activeProv.api_key, modelToTest);
+      const res = await api.testConnection(
+        activeProv.base_url,
+        activeProv.api_key,
+        effectiveTestModel,
+      );
       setTestResult({ ok: true, msg: `正常 · ${res.latency_ms}ms (${res.model})` });
     } catch (err) {
       setTestResult({ ok: false, msg: err instanceof Error ? err.message : '连接失败' });
@@ -150,7 +482,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           <div className="macos-segmented p-[2px] rounded-[7px] flex items-center gap-0.5">
             <button
-              onClick={() => setTab('providers')}
+              onClick={() => {
+                setTab('providers');
+                setOpenPickerRole(null);
+              }}
               className={`px-3 py-1 rounded-[5px] text-[12px] font-medium transition-all ${
                 tab === 'providers'
                   ? 'macos-segmented-active text-[#1D1D1F] dark:text-[#F5F5F7]'
@@ -191,10 +526,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   return (
                     <button
                       key={p.id}
-                      onClick={() => {
-                        setSelectedProvId(p.id);
-                        setTestResult(null);
-                      }}
+                      onClick={() => handleSelectProvider(p)}
                       className={`w-full text-left px-2.5 py-[7px] rounded-[7px] text-[12px] flex items-center justify-between transition-all ${
                         active
                           ? 'macos-sidebar-active font-medium'
@@ -245,6 +577,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <input
                     value={activeProv.base_url}
                     onChange={(e) => updateProvider({ base_url: e.target.value })}
+                    onBlur={() => {
+                      if (activeProv.base_url.trim() && activeProv.api_key.trim()) {
+                        loadModelsForProvider(activeProv, true);
+                      }
+                    }}
                     placeholder="https://api.deepseek.com/v1"
                     className="w-full h-[32px] px-3 rounded-[7px] macos-input outline-none text-[12.5px] text-[#1D1D1F] dark:text-[#F5F5F7] font-mono"
                   />
@@ -259,6 +596,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       type={showKey ? 'text' : 'password'}
                       value={activeProv.api_key}
                       onChange={(e) => updateProvider({ api_key: e.target.value })}
+                      onBlur={() => {
+                        if (activeProv.base_url.trim() && activeProv.api_key.trim()) {
+                          loadModelsForProvider(activeProv, true);
+                        }
+                      }}
                       placeholder="sk-..."
                       className="w-full h-[32px] pl-3 pr-9 rounded-[7px] macos-input outline-none text-[12.5px] text-[#1D1D1F] dark:text-[#F5F5F7] font-mono"
                     />
@@ -272,17 +614,51 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                 </div>
 
-                {/* Connectivity Test */}
+                {/* Live Models & Connectivity Test */}
                 <div className="pt-2.5 border-t border-black/[0.06] dark:border-white/[0.07] space-y-2.5">
                   <div className="flex items-center gap-2">
-                    <input
-                      value={testModel}
-                      onChange={(e) => setTestModel(e.target.value)}
-                      placeholder={activePreset?.suggested_models[0]?.id || '模型 ID'}
-                      className="flex-1 h-[30px] px-2.5 rounded-[6px] macos-input text-[12px] text-[#1D1D1F] dark:text-[#F5F5F7] font-mono outline-none"
-                    />
+                    {activeModels.length > 0 ? (
+                      <select
+                        value={effectiveTestModel}
+                        onChange={(e) => setTestModel(e.target.value)}
+                        className="flex-1 min-w-0 h-[30px] px-2.5 rounded-[6px] macos-input macos-select text-[12px] text-[#1D1D1F] dark:text-[#F5F5F7] font-mono outline-none"
+                      >
+                        {activeModels.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.id}
+                            {m.vision ? ' [VL]' : ''}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        value={testModel}
+                        onChange={(e) => setTestModel(e.target.value)}
+                        placeholder="模型 ID"
+                        className="flex-1 h-[30px] px-2.5 rounded-[6px] macos-input text-[12px] text-[#1D1D1F] dark:text-[#F5F5F7] font-mono outline-none"
+                      />
+                    )}
+
                     <button
-                      disabled={testing || !activeProv.api_key.trim()}
+                      type="button"
+                      disabled={
+                        activeModelLoading ||
+                        !activeProv.api_key.trim() ||
+                        !activeProv.base_url.trim()
+                      }
+                      onClick={() => loadModelsForProvider(activeProv, true)}
+                      title="拉取模型列表"
+                      className="h-[30px] px-2.5 rounded-[6px] macos-btn-secondary disabled:opacity-45 text-[12px] text-[#1D1D1F] dark:text-[#F5F5F7] flex items-center gap-1"
+                    >
+                      <RefreshCw
+                        className={`w-3.5 h-3.5 text-[#515154] dark:text-[#AEAEB2] ${
+                          activeModelLoading ? 'animate-spin' : ''
+                        }`}
+                      />
+                    </button>
+
+                    <button
+                      disabled={testing || !activeProv.api_key.trim() || !effectiveTestModel}
                       onClick={handleTest}
                       className="h-[30px] px-3 rounded-[6px] macos-btn-secondary disabled:opacity-45 text-[12px] font-medium text-[#1D1D1F] dark:text-[#F5F5F7] flex items-center gap-1.5"
                     >
@@ -295,6 +671,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </button>
                   </div>
 
+                  {activeModelLoading && (
+                    <div className="text-[11px] text-[#8E8E93]">正在从 API 拉取模型列表…</div>
+                  )}
+                  {!activeModelLoading && activeModelErr && (
+                    <div className="text-[11px] text-[#DC2626] dark:text-[#FF6961] break-words">
+                      模型列表：{activeModelErr}
+                    </div>
+                  )}
+                  {!activeModelLoading && !activeModelErr && activeModels.length > 0 && (
+                    <div className="text-[11px] text-[#8E8E93] tabular-nums">
+                      已从 API 同步 {activeModels.length} 个可用模型
+                    </div>
+                  )}
+
                   {testResult && (
                     <div
                       className={`text-[11.5px] px-2.5 py-1.5 rounded-[6px] ${
@@ -306,20 +696,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       {testResult.msg}
                     </div>
                   )}
-
-                  {activePreset && activePreset.suggested_models.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 pt-0.5">
-                      {activePreset.suggested_models.map((sm) => (
-                        <button
-                          key={sm.id}
-                          onClick={() => setTestModel(sm.id)}
-                          className="px-2 py-0.5 rounded-[5px] macos-well hover:bg-black/[0.06] dark:hover:bg-white/[0.1] text-[11px] text-[#515154] dark:text-[#AEAEB2] font-mono transition-colors"
-                        >
-                          {sm.id}
-                        </button>
-                      ))}
-                    </div>
-                  )}
                 </div>
               </div>
             )}
@@ -327,13 +703,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         ) : (
           /* 4-Role Routing Editor */
           <div className="flex-1 overflow-y-auto p-3.5 space-y-2">
-            {roles.map((rDef) => {
+            {roles.map((rDef, roleIdx) => {
               const route = settings.routes[rDef.role];
               if (!route) return null;
-              const presetForProv = presets.find((p) => p.id === route.provider_id);
+              const prov = settings.providers.find((p) => p.id === route.provider_id);
+              const provModels = modelsByProv[route.provider_id] || [];
+              const isPickerOpen = openPickerRole === rDef.role;
 
               return (
-                <div key={rDef.role} className="rounded-[10px] macos-card px-3.5 py-2.5 space-y-2">
+                <div
+                  key={rDef.role}
+                  className={`relative rounded-[10px] macos-card px-3.5 py-2.5 space-y-2 ${
+                    isPickerOpen ? 'z-30' : 'z-0'
+                  }`}
+                >
                   <div className="flex items-center justify-between">
                     <span className="text-[12.5px] font-semibold text-[#1D1D1F] dark:text-[#F5F5F7]">
                       {rDef.label}
@@ -366,18 +749,37 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         value={route.provider_id}
                         onChange={(e) => {
                           const nextPid = e.target.value;
-                          const nextPreset = presets.find((p) => p.id === nextPid);
-                          const suggested = nextPreset?.suggested_models[0];
+                          const nextProv = settings.providers.find((p) => p.id === nextPid);
+                          const nextModels = modelsByProv[nextPid] || [];
+                          const picked =
+                            rDef.role === 'vision_worker'
+                              ? nextModels.find((m) => m.vision) || nextModels[0]
+                              : nextModels[0];
+
                           updateRoute(rDef.role, {
                             provider_id: nextPid,
-                            ...(suggested
+                            ...(picked
                               ? {
-                                  model: suggested.id,
-                                  input_price_per_m: suggested.input_price,
-                                  output_price_per_m: suggested.output_price,
+                                  model: picked.id,
+                                  ...(picked.input_price !== null && picked.output_price !== null
+                                    ? {
+                                        input_price_per_m: picked.input_price,
+                                        output_price_per_m: picked.output_price,
+                                      }
+                                    : {}),
                                 }
                               : {}),
                           });
+
+                          if (
+                            nextProv &&
+                            nextProv.api_key.trim() &&
+                            nextProv.base_url.trim() &&
+                            !modelsByProv[nextPid] &&
+                            !loadingProv[nextPid]
+                          ) {
+                            loadModelsForProvider(nextProv);
+                          }
                         }}
                         className="w-full min-w-0 h-[30px] rounded-[6px] macos-input macos-select pl-2 text-[12px] text-[#1D1D1F] dark:text-[#F5F5F7] outline-none"
                       >
@@ -390,32 +792,40 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
 
                     <div className="col-span-4">
-                      <label className="block text-[10.5px] text-[#8E8E93] mb-0.5">模型</label>
-                      <input
-                        list={`models-${rDef.role}`}
-                        value={route.model}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          const matched = presetForProv?.suggested_models.find((m) => m.id === val);
+                      <ModelPicker
+                        roleIndex={roleIdx}
+                        provider={prov}
+                        currentModel={route.model}
+                        models={provModels}
+                        loading={Boolean(loadingProv[route.provider_id])}
+                        error={provModelErr[route.provider_id] || ''}
+                        isVisionRole={rDef.role === 'vision_worker'}
+                        isOpen={isPickerOpen}
+                        onToggleOpen={() =>
+                          setOpenPickerRole((cur) => (cur === rDef.role ? null : rDef.role))
+                        }
+                        onClosePopover={() =>
+                          setOpenPickerRole((cur) => (cur === rDef.role ? null : cur))
+                        }
+                        onRefresh={() => prov && loadModelsForProvider(prov, true)}
+                        onSelectModel={(modelId, remoteInfo) => {
                           updateRoute(rDef.role, {
-                            model: val,
-                            ...(matched
+                            model: modelId,
+                            ...(remoteInfo &&
+                            remoteInfo.input_price !== null &&
+                            remoteInfo.output_price !== null
                               ? {
-                                  input_price_per_m: matched.input_price,
-                                  output_price_per_m: matched.output_price,
+                                  input_price_per_m: remoteInfo.input_price,
+                                  output_price_per_m: remoteInfo.output_price,
                                 }
                               : {}),
                           });
                         }}
-                        className="w-full h-[30px] rounded-[6px] macos-input px-2.5 text-[12px] text-[#1D1D1F] dark:text-[#F5F5F7] font-mono outline-none"
+                        onGoConfigureKey={() => {
+                          setTab('providers');
+                          if (prov) handleSelectProvider(prov);
+                        }}
                       />
-                      <datalist id={`models-${rDef.role}`}>
-                        {(presetForProv?.suggested_models || []).map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.label}
-                          </option>
-                        ))}
-                      </datalist>
                     </div>
 
                     <div className="col-span-2">

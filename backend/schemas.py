@@ -130,6 +130,7 @@ class TelemetrySnapshot(BaseModel):
     estimated_cost: float = 0.0
     currency: str = "CNY"
     estimated_plan_tokens: int = 0
+    estimated_plan_cost: float = 0.0
     estimated_plan_seconds: int = 0
     active_models: list[ActiveModelStat] = Field(default_factory=list)
 

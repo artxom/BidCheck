@@ -45,6 +45,14 @@ export interface SuggestedModel {
   output_price: number;
 }
 
+export interface RemoteModelInfo {
+  id: string;
+  vision: boolean;
+  input_price: number | null;
+  output_price: number | null;
+  price_source: 'api' | 'catalog' | 'manual';
+}
+
 export interface ProviderPreset {
   id: string;
   name: string;
@@ -125,6 +133,7 @@ export interface TelemetrySnapshot {
   estimated_cost: number;
   currency: string;
   estimated_plan_tokens: number;
+  estimated_plan_cost: number;
   estimated_plan_seconds: number;
   active_models: ActiveModelStat[];
 }

@@ -11,7 +11,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from backend.agents.master_agent import generate_inspection_plan
+from backend.agents.master_agent import _estimate_plan_metrics, generate_inspection_plan
 from backend.config import BASE_DIR, UPLOADS_DIR, ensure_data_dirs
 from backend.db import (
     append_message,
@@ -248,10 +248,15 @@ async def api_toggle_checklist_item(project_id: str, item_id: str, req: ToggleIt
 
     target_item.enabled = req.enabled
     upsert_checklist_item(project_id, target_item)
-    enabled_cnt = sum(
-        1 for it in proj.checklist if (req.enabled if it.item_id == item_id else it.enabled)
+    enabled_cnt = sum(1 for it in proj.checklist if it.enabled)
+    est_tok, est_cost, est_sec = _estimate_plan_metrics(proj.checklist)
+    await EVENT_BUS.sync_and_broadcast_telemetry(
+        project_id,
+        total_items=enabled_cnt,
+        estimated_plan_tokens=est_tok,
+        estimated_plan_cost=est_cost,
+        estimated_plan_seconds=est_sec,
     )
-    await EVENT_BUS.sync_and_broadcast_telemetry(project_id, total_items=enabled_cnt)
     await EVENT_BUS.emit(project_id, "item_updated", target_item.model_dump())
     return {"item": target_item.model_dump()}
 

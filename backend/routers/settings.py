@@ -20,6 +20,13 @@ class ConnectionTestRequest(BaseModel):
     model: str
 
 
+class FetchModelsRequest(BaseModel):
+    provider_id: str | None = None
+    base_url: str = ""
+    api_key: str = ""
+    force_refresh: bool = False
+
+
 @router.get("")
 async def read_settings() -> dict[str, Any]:
     return {
@@ -34,6 +41,29 @@ async def read_settings() -> dict[str, Any]:
 async def update_settings(payload: AppSettings) -> dict[str, Any]:
     saved = save_settings(payload)
     return {"settings": saved.model_dump()}
+
+
+@router.post("/models")
+async def fetch_provider_models(req: FetchModelsRequest) -> dict[str, Any]:
+    base_url = req.base_url.strip()
+    api_key = req.api_key.strip()
+    if req.provider_id and (not base_url or not api_key):
+        cfg = get_settings()
+        matched = next((p for p in cfg.providers if p.id == req.provider_id), None)
+        if matched:
+            if not base_url:
+                base_url = matched.base_url.strip()
+            if not api_key:
+                api_key = matched.api_key.strip()
+
+    if not base_url or not api_key:
+        raise HTTPException(status_code=400, detail="请先配置 Base URL 与 API Key")
+
+    try:
+        models = await LLM_GATEWAY.list_models(base_url, api_key, force_refresh=req.force_refresh)
+        return {"models": models, "count": len(models)}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"获取模型列表失败：{str(exc)[:200]}") from exc
 
 
 @router.post("/test")
