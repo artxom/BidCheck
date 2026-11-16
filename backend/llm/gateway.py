@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, BadRequestError
 
 from backend.config import (
     NON_CHAT_MODEL_RE,
@@ -149,17 +149,20 @@ class ProjectEventBus:
             cur.progress_pct = 100.0
 
         start_ts = self._run_start_ts.get(project_id)
-        if start_ts and cur.stage in ("inspecting", "assembling_report"):
+        if start_ts and cur.stage in ("planning", "inspecting", "assembling_report"):
             elapsed = max(0.1, time.monotonic() - start_ts)
             cur.elapsed_seconds = round(elapsed, 1)
-            remaining = max(0, cur.total_items - cur.completed_items)
-            if cur.completed_items >= 1 and remaining > 0:
-                rate = cur.completed_items / elapsed  # items per second (naturally accounts for concurrency!)
-                cur.eta_seconds = max(2, int(remaining / max(rate, 0.02)))
-            elif remaining > 0 and cur.estimated_plan_seconds > 0:
-                cur.eta_seconds = max(3, int(cur.estimated_plan_seconds - elapsed))
+            if cur.stage == "planning":
+                cur.eta_seconds = None
             else:
-                cur.eta_seconds = 2 if cur.stage == "assembling_report" else 0
+                remaining = max(0, cur.total_items - cur.completed_items)
+                if cur.completed_items >= 1 and remaining > 0:
+                    rate = cur.completed_items / elapsed  # items per second (naturally accounts for concurrency!)
+                    cur.eta_seconds = max(2, int(remaining / max(rate, 0.02)))
+                elif remaining > 0 and cur.estimated_plan_seconds > 0:
+                    cur.eta_seconds = max(3, int(cur.estimated_plan_seconds - elapsed))
+                else:
+                    cur.eta_seconds = 2 if cur.stage == "assembling_report" else 0
         elif cur.stage == "completed":
             cur.eta_seconds = 0
 
@@ -183,6 +186,10 @@ class ProjectEventBus:
 EVENT_BUS = ProjectEventBus()
 
 
+class NonRetryableLLMError(RuntimeError):
+    """Deterministic LLM failure (truncation / invalid parameter) that must not be retried blindly."""
+
+
 class LLMGateway:
     """Unified multi-provider OpenAI-compatible client with 4-role routing, concurrency limiting & retries."""
 
@@ -191,6 +198,7 @@ class LLMGateway:
     def __init__(self) -> None:
         self._semaphores: dict[tuple[str, int], asyncio.Semaphore] = {}
         self._models_cache: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
+        self._model_caps: dict[str, dict[str, Any]] = {}
 
     def _get_semaphore(self, role: str, limit: int) -> asyncio.Semaphore:
         eff_limit = max(1, min(32, limit))
@@ -230,6 +238,8 @@ class LLMGateway:
         image_paths: list[Path] | None = None,
         temperature: float = 0.1,
         max_tokens: int = 4096,
+        reasoning_effort: str | None = "low",
+        response_json: bool = True,
     ) -> tuple[dict[str, Any], str, int]:
         """Invoke the configured role model and parse JSON output. Returns (parsed_dict, model_name, duration_ms)."""
         provider, route = self.resolve_role(role)
@@ -257,34 +267,118 @@ class LLMGateway:
                 {"role": "user", "content": user_prompt},
             ]
 
+        model_id = route.model.strip()
+        m_lower = model_id.lower()
+
         async with sem:
             EVENT_BUS.mark_call_delta(project_id, role, +1)
             await EVENT_BUS.sync_and_broadcast_telemetry(project_id)
-            t0 = time.perf_counter()
             last_err: Exception | None = None
             try:
                 client = AsyncOpenAI(
                     api_key=provider.api_key.strip(),
                     base_url=provider.base_url.strip(),
-                    timeout=120.0,
-                    max_retries=2,
+                    timeout=180.0,
+                    max_retries=0,
                 )
                 for attempt in range(2):
                     try:
+                        caps = self._model_caps.get(model_id, {})
+                        eff_max_tokens = max_tokens
+                        cap_max_out = caps.get("max_output_tokens")
+                        if isinstance(cap_max_out, int) and cap_max_out > 0:
+                            eff_max_tokens = min(max_tokens, cap_max_out)
+
                         kwargs: dict[str, Any] = {
-                            "model": route.model.strip(),
+                            "model": model_id,
                             "messages": messages,
-                            "max_tokens": max_tokens,
+                            "max_tokens": eff_max_tokens,
                         }
-                        # Reasoning models (e.g. deepseek-reasoner / o1 / o3) reject temperature
-                        m_lower = route.model.lower()
-                        if not any(tag in m_lower for tag in ("reasoner", "o1", "o3", "qwq")):
+                        # Legacy reasoning models reject temperature and response_format
+                        is_legacy_reasoning = any(tag in m_lower for tag in ("reasoner", "r1", "o1", "o3", "qwq"))
+                        if not is_legacy_reasoning and not caps.get("rejects_temperature"):
                             kwargs["temperature"] = temperature
 
-                        resp = await client.chat.completions.create(**kwargs)
+                        supports_effort = bool(caps.get("supports_effort")) or bool(
+                            re.search(r"(deepseek-v4|deepseek-flash|\bo3\b|\bo4-mini\b)", m_lower)
+                        )
+                        if reasoning_effort and supports_effort and not caps.get("rejects_effort"):
+                            kwargs["reasoning_effort"] = reasoning_effort
+
+                        if (
+                            response_json
+                            and not caps.get("rejects_json_format")
+                            and not any(tag in m_lower for tag in ("reasoner", "r1", "qwq"))
+                        ):
+                            kwargs["response_format"] = {"type": "json_object"}
+
+                        resp = None
+                        t0 = time.perf_counter()
+                        for _br_try in range(4):
+                            t0 = time.perf_counter()
+                            try:
+                                resp = await client.chat.completions.create(**kwargs)
+                                break
+                            except BadRequestError as br_exc:
+                                err_low = str(br_exc).lower()
+                                model_cap_entry = self._model_caps.setdefault(model_id, {})
+                                if "reasoning_effort" in kwargs and (
+                                    "reasoning_effort" in err_low
+                                    or "effort" in err_low
+                                    or "unknown" in err_low
+                                    or "unsupported" in err_low
+                                    or "extra" in err_low
+                                ):
+                                    kwargs.pop("reasoning_effort", None)
+                                    model_cap_entry["rejects_effort"] = True
+                                    continue
+                                if "response_format" in kwargs and (
+                                    "response_format" in err_low
+                                    or "json_object" in err_low
+                                    or "json" in err_low
+                                ):
+                                    kwargs.pop("response_format", None)
+                                    model_cap_entry["rejects_json_format"] = True
+                                    continue
+                                if "temperature" in kwargs and "temperature" in err_low:
+                                    kwargs.pop("temperature", None)
+                                    model_cap_entry["rejects_temperature"] = True
+                                    continue
+                                if (
+                                    "max_tokens" in kwargs
+                                    and kwargs["max_tokens"] > 4096
+                                    and (
+                                        "max_tokens" in err_low
+                                        or "range" in err_low
+                                        or "limit" in err_low
+                                        or "exceed" in err_low
+                                    )
+                                ):
+                                    kwargs["max_tokens"] = 8192 if kwargs["max_tokens"] > 8192 else 4096
+                                    continue
+                                # Generic 400 fallback: progressively strip optional kwargs before failing
+                                if "reasoning_effort" in kwargs:
+                                    kwargs.pop("reasoning_effort", None)
+                                    model_cap_entry["rejects_effort"] = True
+                                    continue
+                                if "response_format" in kwargs:
+                                    kwargs.pop("response_format", None)
+                                    model_cap_entry["rejects_json_format"] = True
+                                    continue
+                                if "temperature" in kwargs:
+                                    kwargs.pop("temperature", None)
+                                    model_cap_entry["rejects_temperature"] = True
+                                    continue
+                                raise NonRetryableLLMError(
+                                    f"模型接口参数错误：{str(br_exc)[:180]}"
+                                ) from br_exc
+
+                        assert resp is not None
                         duration_ms = int((time.perf_counter() - t0) * 1000)
 
-                        raw_content = resp.choices[0].message.content or ""
+                        choice = resp.choices[0]
+                        raw_content = choice.message.content or ""
+                        finish_reason = getattr(choice, "finish_reason", None)
                         usage = getattr(resp, "usage", None)
                         p_tok = int(getattr(usage, "prompt_tokens", 0) or 0)
                         c_tok = int(getattr(usage, "completion_tokens", 0) or 0)
@@ -294,6 +388,7 @@ class LLMGateway:
                             c_tok = max(30, len(raw_content) // 2)
 
                         cached_tok = 0
+                        reasoning_tok = 0
                         if usage is not None:
                             raw_hit = getattr(usage, "prompt_cache_hit_tokens", None)
                             if raw_hit is None:
@@ -307,6 +402,18 @@ class LLMGateway:
                                     cached_tok = max(0, min(p_tok, int(raw_hit)))
                                 except (TypeError, ValueError):
                                     cached_tok = 0
+
+                            cdet = getattr(usage, "completion_tokens_details", None)
+                            raw_rt = (
+                                cdet.get("reasoning_tokens")
+                                if isinstance(cdet, dict)
+                                else getattr(cdet, "reasoning_tokens", None)
+                            )
+                            if raw_rt is not None:
+                                try:
+                                    reasoning_tok = max(0, int(raw_rt))
+                                except (TypeError, ValueError):
+                                    reasoning_tok = 0
 
                         direct_cost = None
                         if usage is not None:
@@ -345,8 +452,24 @@ class LLMGateway:
                             cost=cost,
                             duration_ms=duration_ms,
                         )
-                        parsed = extract_json_payload(raw_content)
+                        await EVENT_BUS.sync_and_broadcast_telemetry(project_id)
+
+                        if finish_reason == "length":
+                            if not raw_content.strip():
+                                raise NonRetryableLLMError(
+                                    f"模型输出达到上限被截断（{model_id} 思考消耗 {reasoning_tok or c_tok} tokens，正文输出 0 字符）"
+                                )
+                            try:
+                                parsed = extract_json_payload(raw_content)
+                            except Exception as parse_exc:
+                                raise NonRetryableLLMError(
+                                    f"模型输出达到上限被截断（{model_id} 思考消耗 {reasoning_tok or c_tok} tokens，正文输出 {len(raw_content.strip())} 字符未闭合）"
+                                ) from parse_exc
+                        else:
+                            parsed = extract_json_payload(raw_content)
                         return parsed, route.model, duration_ms
+                    except (NonRetryableLLMError, asyncio.CancelledError):
+                        raise
                     except Exception as exc:
                         last_err = exc
                         if attempt == 0:
@@ -440,6 +563,17 @@ class LLMGateway:
                     in_price, out_price = ref_price
                     price_source = "catalog"
 
+            if raw_dict:
+                caps = self._model_caps.setdefault(model_id, {})
+                effort_obj = raw_dict.get("effort")
+                if isinstance(effort_obj, dict):
+                    levels = effort_obj.get("supported_levels")
+                    if isinstance(levels, list) and "low" in [str(x).lower() for x in levels]:
+                        caps["supports_effort"] = True
+                max_out = raw_dict.get("max_output_tokens") or raw_dict.get("max_completion_tokens")
+                if isinstance(max_out, int) and max_out > 0:
+                    caps["max_output_tokens"] = max_out
+
             return {
                 "id": model_id,
                 "vision": infer_vision_capability(model_id, raw_dict),
@@ -465,15 +599,37 @@ class LLMGateway:
 
     async def test_connection(self, base_url: str, api_key: str, model: str) -> dict[str, Any]:
         """Lightweight live connectivity test for Settings modal."""
-        t0 = time.perf_counter()
-        client = AsyncOpenAI(api_key=api_key.strip(), base_url=base_url.strip(), timeout=25.0, max_retries=0)
-        resp = await client.chat.completions.create(
-            model=model.strip(),
-            messages=[{"role": "user", "content": "请仅回复 OK"}],
-            max_tokens=16,
+        clean_model = model.strip()
+        caps = self._model_caps.get(clean_model, {})
+        m_lower = clean_model.lower()
+        supports_effort = bool(caps.get("supports_effort")) or bool(
+            re.search(r"(deepseek-v4|deepseek-flash|\bo3\b|\bo4-mini\b)", m_lower)
         )
+        t0 = time.perf_counter()
+        client = AsyncOpenAI(
+            api_key=api_key.strip(), base_url=base_url.strip(), timeout=25.0, max_retries=0
+        )
+        kwargs: dict[str, Any] = {
+            "model": clean_model,
+            "messages": [{"role": "user", "content": "请仅回复 OK"}],
+            "max_tokens": 256,
+        }
+        if supports_effort and not caps.get("rejects_effort"):
+            kwargs["reasoning_effort"] = "low"
+        try:
+            resp = await client.chat.completions.create(**kwargs)
+        except BadRequestError:
+            kwargs.pop("reasoning_effort", None)
+            resp = await client.chat.completions.create(**kwargs)
         ms = int((time.perf_counter() - t0) * 1000)
-        reply = (resp.choices[0].message.content or "").strip()
+        msg = resp.choices[0].message
+        reply = (msg.content or "").strip()
+        if not reply:
+            rc = getattr(msg, "reasoning_content", None) or (
+                (getattr(msg, "model_extra", None) or {}).get("reasoning_content")
+            )
+            if rc:
+                reply = f"(思考中:{str(rc).strip()[:36]})"
         return {"ok": True, "latency_ms": ms, "reply": reply[:60], "model": resp.model}
 
 

@@ -14,6 +14,7 @@ from PIL import Image
 
 from backend.config import MEDIA_CACHE_DIR, ensure_data_dirs
 from backend.parsers.models import (
+    CURRENT_AST_VERSION,
     DocumentAST,
     EmptyCellAlert,
     MediaRef,
@@ -37,7 +38,8 @@ R_EMBED = f"{{{R_NS}}}embed"
 EMU_PER_PX = 9525  # 914400 EMU/inch @ 96 DPI
 
 # Heuristic Chinese heading patterns for unstyled paragraphs (especially in tender docs)
-CN_H1_RE = re.compile(r"^(第[一二三四五六七八九十百0-9]+[章节篇部分]|附件\s*[0-9一二三四五六七八九十]*)[\s：:、.]*\S+")
+CN_CHAPTER_RE = re.compile(r"^第[一二三四五六七八九十百0-9]+[章节篇部分][\s：:、.]*\S*")
+CN_APPENDIX_RE = re.compile(r"^附件\s*[0-9一二三四五六七八九十]+[\s：:、.]+\S*")
 CN_H2_RE = re.compile(r"^([一二三四五六七八九十]{1,3}[、.．])\s*\S+")
 CN_LOT_RE = re.compile(r"^([A-Z0-9]+\s*[标分][段包号]|[标分][段包号]\s*[A-Z0-9]+)\s*[：:、—-]?\s*\S*")
 PAGEREF_RE = re.compile(r"PAGEREF\s+([^\s\\]+)")
@@ -400,6 +402,7 @@ def parse_docx(file_path: str | Path, doc_role: str, doc_id: str) -> DocumentAST
 
     physical_page = 1  # Used if has_rendered_pb is True
     in_toc_zone = False
+    has_seen_chapter = False
 
     for child in body:
         tag = etree.QName(child.tag).localname if isinstance(child.tag, str) else ""
@@ -464,13 +467,14 @@ def parse_docx(file_path: str | Path, doc_role: str, doc_id: str) -> DocumentAST
 
                 # Fallback heuristic heading detection for unstyled tender/response headings
                 heuristic_lvl: int | None = None
-                if eff_olvl is None and txt and len(txt) <= 72 and not txt.endswith(("。", "；", "：", ":")):
-                    if CN_H1_RE.match(txt):
+                if eff_olvl is None and txt and len(txt) <= 72:
+                    if CN_CHAPTER_RE.match(txt) and not txt.endswith(("。", "；", "：", ":")):
                         heuristic_lvl = 0
-                    elif CN_LOT_RE.match(txt):
+                    elif CN_H2_RE.match(txt) and doc_role == "tender" and not txt.endswith(("。", "；")):
                         heuristic_lvl = 1
-                    elif CN_H2_RE.match(txt) and doc_role == "tender":
-                        heuristic_lvl = 1
+                    elif not txt.endswith(("。", "；", "：", ":")):
+                        if CN_APPENDIX_RE.match(txt) or CN_LOT_RE.match(txt):
+                            heuristic_lvl = 1
 
                 final_olvl = eff_olvl if eff_olvl is not None else heuristic_lvl
 
@@ -478,6 +482,19 @@ def parse_docx(file_path: str | Path, doc_role: str, doc_id: str) -> DocumentAST
                 if final_olvl is not None and final_olvl <= 5 and txt:
                     in_toc_zone = False
                     lvl = final_olvl + 1  # 1..6
+
+                    is_chapter_heading = bool(CN_CHAPTER_RE.match(txt)) and len(txt) <= 72
+                    if is_chapter_heading:
+                        has_seen_chapter = True
+                        lvl = 1
+                    elif has_seen_chapter:
+                        lvl = max(2, lvl)
+                        if doc_role == "tender":
+                            if CN_H2_RE.match(txt):
+                                lvl = 2
+                            elif CN_LOT_RE.match(txt):
+                                lvl = 3
+
                     while heading_stack and heading_stack[-1][0] >= lvl:
                         heading_stack.pop()
                     parent_id = heading_stack[-1][1] if heading_stack else None
@@ -598,6 +615,7 @@ def parse_docx(file_path: str | Path, doc_role: str, doc_id: str) -> DocumentAST
 
     total_chars = sum(s.char_count for s in sections)
     return DocumentAST(
+        ast_version=CURRENT_AST_VERSION,
         doc_id=doc_id,
         filename=path.name,
         source_path=str(path.resolve()),

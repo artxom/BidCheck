@@ -11,9 +11,11 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from backend.agents.master_agent import (
+    cancel_project_task,
     generate_inspection_plan,
     handle_user_chat,
     launch_background_inspection,
+    launch_background_plan,
 )
 from backend.db import append_message, get_project
 from backend.llm.gateway import EVENT_BUS
@@ -27,6 +29,7 @@ class ChatRequest(BaseModel):
 
 class PlanRequest(BaseModel):
     target_lot: str | None = None
+    async_run: bool = False
 
 
 class RunRequest(BaseModel):
@@ -60,13 +63,30 @@ async def api_send_chat(project_id: str, req: ChatRequest) -> dict[str, Any]:
 
 @router.post("/plan")
 async def api_trigger_plan(project_id: str, req: PlanRequest) -> dict[str, Any]:
-    if not get_project(project_id):
+    proj = get_project(project_id)
+    if not proj:
         raise HTTPException(status_code=404, detail="项目不存在")
+    if not proj.tender_doc or not proj.response_doc:
+        raise HTTPException(status_code=400, detail="请先挂载《官方招标文件》与《我方响应文件》")
+    if req.async_run:
+        started = launch_background_plan(project_id, target_lot_override=req.target_lot)
+        if not started:
+            raise HTTPException(status_code=409, detail="当前已有任务正在运行中")
+        return {"started": True, "project": get_project(project_id).model_dump()}  # type: ignore[union-attr]
     try:
         msg = await generate_inspection_plan(project_id, target_lot_override=req.target_lot)
         return {"message": msg.model_dump(), "project": get_project(project_id).model_dump()}  # type: ignore[union-attr]
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)[:240]) from exc
+
+
+@router.post("/cancel")
+async def api_cancel_task(project_id: str) -> dict[str, Any]:
+    proj = get_project(project_id)
+    if not proj:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    cancelled = await cancel_project_task(project_id)
+    return {"cancelled": cancelled, "project": get_project(project_id).model_dump()}  # type: ignore[union-attr]
 
 
 @router.post("/run")

@@ -185,7 +185,7 @@ class ChatMessage(BaseModel):
     project_id: str
     role: Literal["user", "assistant", "system"]
     content: str
-    msg_type: Literal["text", "plan_card", "report_ready", "error"] = "text"
+    msg_type: Literal["text", "precheck_card", "plan_card", "report_ready", "error"] = "text"
     meta: dict[str, Any] = Field(default_factory=dict)
     created_at: str
 

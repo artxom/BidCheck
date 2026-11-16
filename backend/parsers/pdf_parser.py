@@ -11,10 +11,12 @@ import pymupdf as fitz  # PyMuPDF
 from PIL import Image
 
 from backend.config import MEDIA_CACHE_DIR, ensure_data_dirs
-from backend.parsers.models import DocumentAST, MediaRef, SectionNode, TableBlock
+from backend.parsers.models import CURRENT_AST_VERSION, DocumentAST, MediaRef, SectionNode, TableBlock
 
-CN_HEAD_H1 = re.compile(r"^(第[一二三四五六七八九十百0-9]+[章节篇部分]|附件\s*[0-9一二三四五六七八九十]*)[\s：:、.]*\S+")
+CN_CHAPTER_RE = re.compile(r"^第[一二三四五六七八九十百0-9]+[章节篇部分][\s：:、.]*\S*")
+CN_APPENDIX_RE = re.compile(r"^附件\s*[0-9一二三四五六七八九十]+[\s：:、.]+\S*")
 CN_HEAD_H2 = re.compile(r"^([一二三四五六七八九十]{1,3}[、.．]|\d+\.\d*\s+\S+)\s*")
+CN_LOT_RE = re.compile(r"^([A-Z0-9]+\s*[标分][段包号]|[标分][段包号]\s*[A-Z0-9]+)\s*[：:、—-]?\s*\S*")
 
 
 def parse_pdf(file_path: str | Path, doc_role: str, doc_id: str) -> DocumentAST:
@@ -43,6 +45,7 @@ def parse_pdf(file_path: str | Path, doc_role: str, doc_id: str) -> DocumentAST:
     sec_counter = 0
     tbl_counter = 0
     img_counter = 0
+    has_seen_chapter = False
 
     current_section = SectionNode(
         section_id="sec_0000",
@@ -68,6 +71,16 @@ def parse_pdf(file_path: str | Path, doc_role: str, doc_id: str) -> DocumentAST:
         # Create sections from PDF outline bookmarks starting on this page
         if page_num in toc_by_page:
             for lvl, b_title in toc_by_page[page_num]:
+                if CN_CHAPTER_RE.match(b_title) and len(b_title) <= 72:
+                    has_seen_chapter = True
+                    lvl = 1
+                elif has_seen_chapter:
+                    lvl = max(2, lvl)
+                    if doc_role == "tender":
+                        if CN_HEAD_H2.match(b_title):
+                            lvl = 2
+                        elif CN_LOT_RE.match(b_title):
+                            lvl = 3
                 while heading_stack and heading_stack[-1][0] >= lvl:
                     heading_stack.pop()
                 parent_id = heading_stack[-1][1] if heading_stack else None
@@ -89,13 +102,27 @@ def parse_pdf(file_path: str | Path, doc_role: str, doc_id: str) -> DocumentAST:
 
         for ln in lines:
             # If PDF lacks outline bookmarks, infer headings via Chinese numbering
-            if not toc_entries and len(ln) <= 68 and not ln.endswith(("。", "；", "：", ":")):
+            if not toc_entries and len(ln) <= 72:
                 inferred_lvl: int | None = None
-                if CN_HEAD_H1.match(ln):
+                if CN_CHAPTER_RE.match(ln) and not ln.endswith(("。", "；", "：", ":")):
                     inferred_lvl = 1
-                elif CN_HEAD_H2.match(ln):
+                elif CN_HEAD_H2.match(ln) and not ln.endswith(("。", "；")):
                     inferred_lvl = 2
+                elif not ln.endswith(("。", "；", "：", ":")):
+                    if CN_APPENDIX_RE.match(ln) or CN_LOT_RE.match(ln):
+                        inferred_lvl = 2
+
                 if inferred_lvl is not None:
+                    if CN_CHAPTER_RE.match(ln):
+                        has_seen_chapter = True
+                        inferred_lvl = 1
+                    elif has_seen_chapter:
+                        inferred_lvl = max(2, inferred_lvl)
+                        if doc_role == "tender":
+                            if CN_HEAD_H2.match(ln):
+                                inferred_lvl = 2
+                            elif CN_LOT_RE.match(ln):
+                                inferred_lvl = 3
                     while heading_stack and heading_stack[-1][0] >= inferred_lvl:
                         heading_stack.pop()
                     parent_id = heading_stack[-1][1] if heading_stack else None
@@ -194,6 +221,7 @@ def parse_pdf(file_path: str | Path, doc_role: str, doc_id: str) -> DocumentAST:
 
     total_chars = sum(s.char_count for s in sections)
     return DocumentAST(
+        ast_version=CURRENT_AST_VERSION,
         doc_id=doc_id,
         filename=path.name,
         source_path=str(path.resolve()),

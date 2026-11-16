@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any, Literal
 from pydantic import BaseModel, Field
 
+CURRENT_AST_VERSION = 2
+
 
 class MediaRef(BaseModel):
     media_id: str
@@ -84,6 +86,7 @@ class DeterministicFinding(BaseModel):
 
 
 class DocumentAST(BaseModel):
+    ast_version: int = 1
     doc_id: str
     filename: str
     source_path: str

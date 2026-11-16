@@ -200,7 +200,7 @@ export interface ChatMessage {
   project_id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
-  msg_type: 'text' | 'plan_card' | 'report_ready' | 'error';
+  msg_type: 'text' | 'precheck_card' | 'plan_card' | 'report_ready' | 'error';
   meta: Record<string, unknown>;
   created_at: string;
 }

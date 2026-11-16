@@ -2,7 +2,7 @@
 
 > **文档定位**：本文件为项目的**权威工程交接基准（Single Source of Truth）**。依据项目维护铁律，**每次阶段性开发或优化执行完毕后，必须通过全部自动化测试、同步更新本交接文档的架构说明与第八章《里程碑交接台账》，并提交同步至 GitHub 远端仓库。**
 
-- **当前版本**：`v0.3.0`
+- **当前版本**：`v0.4.0`
 - **主干分支**：`main`
 - **技术栈**：Python 3.11+ / FastAPI / SQLite (WAL) / lxml / PyMuPDF / AsyncOpenAI + React 19 / TypeScript / Vite 6 / Tailwind CSS v4
 
@@ -60,13 +60,13 @@
 | `backend/config.py` | 运行时目录定义、8 家主流模型供应商预设、参考单价目录（`MODEL_PRICING_RULES`）、视觉能力推断（`infer_vision_capability`）与四角色定义 |
 | `backend/schemas.py` | Pydantic 核心契约（`AppSettings`、`ChecklistItem`、`TelemetrySnapshot` 含 `estimated_plan_cost`、`InspectionReport`、`ProjectDetail`） |
 | `backend/db.py` | SQLite WAL 连接池锁管理、项目 CRUD、检查项断点持久化、会话历史与 `token_ledger` 聚合统计 |
-| `backend/parsers/docx_parser.py` | 原生 OOXML 流式解析段落/表格/`<a:blip>` 图片引用，结合目录 `PAGEREF` 书签映射精准页码，支持 `.tiff`/`.png` 懒转码压缩 JPEG |
-| `backend/parsers/pdf_parser.py` | 基于 PyMuPDF (`fitz`) 的 PDF 书签大纲/字号启发式分章、文本表格提取与内嵌图按需转码 |
-| `backend/parsers/indexer.py` | 封面/标段元数据提取、6 类零 Token 确定性红线扫描器、`SectionRetriever` 混合检索器、AST 磁盘缓存 |
-| `backend/llm/gateway.py` | `LLMGateway`（四角色路由、`/models` 动态模型拉取与 5 分钟缓存、`cached_tokens`/`usage.cost` 精准计费、信号量限流、容错 JSON 解析）与 `ProjectEventBus` |
+| `backend/parsers/docx_parser.py` | 原生 OOXML 流式解析段落/表格/`<a:blip>` 图片引用，章节树状态机保护（防普通 `附件：` 或标段子标题越权弹出章节点），结合目录 `PAGEREF` 锚定页码并懒转码压缩 JPEG |
+| `backend/parsers/pdf_parser.py` | 基于 PyMuPDF (`fitz`) 的 PDF 书签大纲/字号启发式分章（同步应用章级与标段层级保护）、文本表格提取与内嵌图按需转码 |
+| `backend/parsers/indexer.py` | 封面/标段元数据提取、6 类零 Token 确定性红线扫描器、合同过滤瘦身与全书紧凑骨架目录（`build_response_outline_summary`）、AST 版本化缓存 |
+| `backend/llm/gateway.py` | `LLMGateway`（四角色路由、`/models` 能力与清单拉取、`reasoning_effort="low"` 与 HTTP 400 自动降级、`finish_reason="length"` 防盲目重试、实时单次遥测广播）与 `ProjectEventBus` |
 | `backend/llm/prompts.py` | 针对中国大陆招投标定制的四角色 System Prompts（规划、文本核查、视觉验图、报告总装、会话控制） |
-| `backend/agents/master_agent.py` | 双文档规划拆解、基于真实检索章节字数与角色单价的 `_estimate_plan_metrics` 预估、强制注入全局红线核查项、自然语言意图分发 |
-| `backend/agents/worker_engine.py` | 异步并发逐项核查、确定性致命占位符强制降级硬锁（防误判 `passed`）、按需多模态验图 |
+| `backend/agents/master_agent.py` | 0-Token 上传预检确认（`emit_document_precheck`）、双文档规划拆解、基于真实检索章节字数与角色单价的 `_estimate_plan_metrics` 预估、任务锁与 `/cancel` 取消控制 |
+| `backend/agents/worker_engine.py` | 异步并发逐项核查（含 `asyncio.CancelledError` 安全回退）、确定性致命占位符强制降级硬锁、按需多模态验图 |
 | `backend/agents/report_agent.py` | 全局响应统计、就绪度评分计算、封标风险结论汇编（含无 API 异常时的确定性兜底报告） |
 | `backend/exporters/docx_exporter.py` | 使用 `python-docx` 生成正式排版 Word 核查报告（总体结论、优先整改、固有预警、逐项明细表） |
 | `backend/exporters/xlsx_exporter.py` | 使用 `openpyxl` 生成双 Sheet Excel 整改销项表（问题项自动置顶、状态着色、责任人认领列与自动筛选） |
@@ -98,7 +98,7 @@
   - `app_kv`：全局键值配置（`key='settings'` 存储供应商 API Key 与四角色路由 JSON）
   - `projects`：项目主表（名称、阶段、目标标段、双文档摘要 JSON、报告 JSON、遥测快照 JSON）
   - `checklist_items`：核查清单明细表（复合主键 `(project_id, item_id)`，每完成一项立即落盘防丢）
-  - `messages`：Master 会话消息流（支持 `text`、`plan_card`、`report_ready`、`error`）
+  - `messages`：Master 会话消息流（支持 `text`、`precheck_card`、`plan_card`、`report_ready`、`error`）
   - `token_ledger`：每次大模型调用的输入/输出 Token、耗时与成本流水表
 - `data/uploads/`：流式接收的上传标书文件副本
 - `data/ast_cache/`：解析后的 `DocumentAST` JSON 缓存（避免重复解析百兆文件）
@@ -106,21 +106,22 @@
 - `data/reports/`：导出的 `.docx` 与 `.xlsx` 临时报告文件
 
 ### 3.2 项目状态机（`stage`）
-`idle`（就绪/待导入） → `parsing`（解析文档中） → `planning`（Master 拆解规划中） → `awaiting_confirm`（待确认执行/待复检） → `inspecting`（并发核查中） → `assembling_report`（汇总报告中） → `completed`（已完成） / `error`（异常）。
+`idle`（就绪 / 待导入 / 待生成清单 / 已停止） → `parsing`（解析文档中） → `planning`（Master 拆解规划中，实时计时） → `awaiting_confirm`（待确认执行 / 待复检） → `inspecting`（并发核查中） → `assembling_report`（汇总报告中） → `completed`（已完成） / `error`（异常）。
 
 ### 3.3 核心 API 与 SSE 契约
 
 | 方法 | 路径 | 说明 |
 | :--- | :--- | :--- |
 | `GET / POST` | `/api/projects` | 获取项目列表 / 创建新项目 |
-| `GET / DELETE` | `/api/projects/{id}` | 获取项目完整详情 / 删除项目及关联缓存 |
+| `GET / DELETE` | `/api/projects/{id}` | 获取项目完整详情 / 中止在途任务并删除项目及关联缓存 |
 | `GET` | `/api/workspace-samples` | 列出工作区根目录可直接零拷贝挂载的本地示例标书 |
-| `POST` | `/api/projects/{id}/documents/upload` | `8MB` 分块流式上传 `.docx` / `.pdf`（双文档齐备后自动异步触发规划） |
+| `POST` | `/api/projects/{id}/documents/upload` | `8MB` 分块流式上传 `.docx` / `.pdf`（双文档齐备后输出 0-Token 预检确认卡，不自动偷跑大模型） |
 | `POST` | `/api/projects/{id}/documents/mount-local` | 直接挂载工作区本地大体积标书 |
-| `PATCH` | `/api/projects/{id}/checklist/{item_id}` | 启用或跳过单条核查项 |
+| `PATCH` | `/api/projects/{id}/checklist/{item_id}` | 启用或跳过单条核查项（同步重算计划预估） |
 | `POST` | `/api/projects/{id}/chat` | 向 Master Agent 发送自然语言指令 |
-| `POST` | `/api/projects/{id}/plan` | 显式触发或按指定标段重生成核查清单 |
+| `POST` | `/api/projects/{id}/plan` | 显式触发或按指定标段生成核查清单（支持 `async_run=true` 异步可取消执行） |
 | `POST` | `/api/projects/{id}/run` | 启动后台并发核查（`recheck_only=true` 时仅复检问题项） |
+| `POST` | `/api/projects/{id}/cancel` | 中止当前项目正在运行中的规划或核查后台任务 |
 | `GET` | `/api/projects/{id}/events` | **SSE 实时流**：推送 `telemetry`、`item_updated`、`checklist_replaced`、`chat_message`、`report_ready`、`doc_mounted` |
 | `GET` | `/api/projects/{id}/outline` | 获取响应文件目录大纲与固有红线扫描列表 |
 | `GET` | `/api/projects/{id}/sections/{sec_id}` | 获取指定章节原文段落、表格与图片 ID |
@@ -253,6 +254,26 @@ git log --oneline -n 5
 ---
 
 ## 八、里程碑交接台账（Milestone Handover Log）
+
+### Milestone 4 — `v0.4.0`（2026-11-16）
+- **阶段目标**：将双文件上传后的自动规划重构为 0-Token 预检确认闭环，解决推理模型（`deepseek-v4-pro` / `deepseek-flash`）默认思考链耗尽 `max_tokens` 导致的空 JSON 截断与同参盲目重试问题，并修复招标摘要合同泄漏、公共表格误删及目录截断缺陷。
+- **核心变更内容**：
+  1. **0-Token 上传预检确认与任务可取消闭环**：移除 `backend/routers/projects.py` 上传后自动启动大模型的偷跑逻辑，改为输出 `precheck_card`（展示页数、标段选择器、18 处本地形式预警及预计输入 Token），由用户显式点击「生成检查计划」后启动；新增 `POST /api/projects/{id}/cancel` 及顶栏/底部「停止」控制、规划阶段每秒耗时心跳与 `/chat`、`/plan` 异常防卡死保护。
+  2. **推理模型防截断适配与网关止血**：在 `backend/llm/gateway.py` 缓存 `/models` 能力元数据，为支持 `effort` 的模型自动协商 `reasoning_effort="low"` 与 `response_format={"type": "json_object"}`（遇 HTTP 400 自动零损耗剥离降级），将各角色 `max_tokens` 提升至 `16384 / 4096 / 2048 / 6144`，关闭 SDK 隐式重试；遇到 `finish_reason="length"` 截断立即抛出 `NonRetryableLLMError` 并诊断思考 Token 消耗，严禁同参重试；每次调用记账后立即推送 SSE 遥测并修正单次耗时计时器；升级 `test_connection` 防止推理模型 `max_tokens=16` 空回复假阳性。
+  3. **章节层级状态机与全书紧凑目录修复**：新增 `CURRENT_AST_VERSION = 2`（自动刷新旧 AST 缓存）；拆分 `CN_CHAPTER_RE` 与 `CN_APPENDIX_RE` 并加入章级归属保护（修复第五章合同附件越权弹出及第四章 `附件：身份证...` 污染面包屑，并放宽 `CN_H2_RE` 冒号结尾标题识别），使 `build_tender_digest` 彻底剔除第五章合同样板并完整保留第三/四章非功能需求；`build_response_outline_summary` 默认输出全书紧凑骨架目录（~3.8k 字符完整覆盖 `P1–P636`）。
+  4. **严格遵守用户单价手工维护要求**：保留既有 `MODEL_PRICING_RULES` 与缓存折扣系数未做改动。
+- **涉及主要文件**：
+  - 后端：`backend/schemas.py`、`backend/parsers/models.py`、`backend/parsers/docx_parser.py`、`backend/parsers/pdf_parser.py`、`backend/parsers/indexer.py`、`backend/llm/gateway.py`、`backend/agents/master_agent.py`、`backend/agents/worker_engine.py`、`backend/agents/report_agent.py`、`backend/routers/projects.py`、`backend/routers/chat_stream.py`
+  - 前端：`frontend/src/types.ts`、`frontend/src/api.ts`、`frontend/src/App.tsx`、`frontend/src/components/TopToolbar.tsx`、`frontend/src/components/MasterChatPane.tsx`
+  - 文档与测试：`docs/HANDOVER.md`、`tests/test_ui_and_handover.py`
+- **验证记录**：
+  - `(cd frontend && npm run build)` 类型检查与 Vite 生产构建零报错通过
+  - `.venv/bin/pytest -v` 9 项全量自动化测试通过（含 0-Token 预检验证、第五章剔除与非功能需求完整保留测试、`finish_reason="length"` 截断零重试测试、HTTP 400 参数降级测试、`/cancel` 任务中止测试）
+  - 重启本地 `127.0.0.1:8000` 服务并验证 `/api/health` 与最新静态资源包加载
+- **已知边界与下一阶段建议**：
+  - 当前 `deepseek-v4-pro` 等单价由用户在设置面板手工维护；若接入支持直返 `usage.cost` 的聚合网关可自动读取账单实扣金额。
+
+---
 
 ### Milestone 3 — `v0.3.0`（2026-11-16）
 - **阶段目标**：将设置面板的模型选择升级为通过供应商 `/models` API 动态拉取实时清单并自动联动单价，同时把执行前预估升级为基于真实文档检索分块与角色单价的精确测算，并加固缓存命中与直返费用计费精度。

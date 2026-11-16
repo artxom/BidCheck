@@ -290,6 +290,15 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleTriggerPlan = async (targetLot?: string) => {
+    if (!activeProject) return;
+    try {
+      await api.triggerPlan(activeProject.id, targetLot, true);
+    } catch (err) {
+      showError(err instanceof Error ? err.message : '启动规划失败');
+    }
+  };
+
   const handleStartRun = async (recheckOnly: boolean) => {
     if (!activeProject) return;
     setInspectorTab('live');
@@ -297,6 +306,19 @@ export const App: React.FC = () => {
       await api.startRun(activeProject.id, recheckOnly);
     } catch (err) {
       showError(err instanceof Error ? err.message : '启动失败');
+    }
+  };
+
+  const handleCancelTask = async () => {
+    if (!activeProject) return;
+    try {
+      const res = await api.cancelTask(activeProject.id);
+      if (res.project) {
+        setActiveProject((prev) => (prev && prev.id === res.project.id ? res.project : prev));
+      }
+      refreshProjectList();
+    } catch (err) {
+      showError(err instanceof Error ? err.message : '停止失败');
     }
   };
 
@@ -344,6 +366,7 @@ export const App: React.FC = () => {
         resolvedTheme={resolvedTheme}
         onToggleTheme={toggleLightDark}
         onOpenSettings={() => setSettingsOpen(true)}
+        onCancelTask={handleCancelTask}
       />
 
       <main className="relative flex-1 flex min-h-0 overflow-hidden">
@@ -377,7 +400,9 @@ export const App: React.FC = () => {
               onUploadFile={handleUploadFile}
               onMountSample={handleMountSample}
               onSendMessage={handleSendMessage}
+              onTriggerPlan={handleTriggerPlan}
               onStartRun={handleStartRun}
+              onCancelTask={handleCancelTask}
               onSwitchInspectorTab={setInspectorTab}
             />
 

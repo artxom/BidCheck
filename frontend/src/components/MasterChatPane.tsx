@@ -10,6 +10,7 @@ import {
   FileSpreadsheet,
   Loader2,
   FolderOpen,
+  Square,
 } from 'lucide-react';
 import type { ChatMessage, DocumentSummary, ProjectDetail, WorkspaceSample } from '../types';
 
@@ -22,7 +23,9 @@ interface MasterChatPaneProps {
   onUploadFile: (role: 'tender' | 'response', file: File) => void;
   onMountSample: (role: 'tender' | 'response', filename: string) => void;
   onSendMessage: (msg: string) => void;
+  onTriggerPlan: (targetLot?: string) => void;
   onStartRun: (recheckOnly: boolean) => void;
+  onCancelTask: () => void;
   onSwitchInspectorTab: (tab: 'live' | 'report' | 'evidence') => void;
 }
 
@@ -232,10 +235,13 @@ export const MasterChatPane: React.FC<MasterChatPaneProps> = ({
   onUploadFile,
   onMountSample,
   onSendMessage,
+  onTriggerPlan,
   onStartRun,
+  onCancelTask,
   onSwitchInspectorTab,
 }) => {
   const [input, setInput] = useState('');
+  const [lotOverrides, setLotOverrides] = useState<Record<string, string>>({});
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -315,6 +321,78 @@ export const MasterChatPane: React.FC<MasterChatPaneProps> = ({
                       <LiteMarkdown text={m.content} />
                     )}
 
+                    {/* Inline Precheck Action Bar (0-Token local parse gate) */}
+                    {m.msg_type === 'precheck_card' && (() => {
+                      const detectedLots = Array.isArray(m.meta?.detected_lots)
+                        ? (m.meta.detected_lots as string[])
+                        : [];
+                      const parseLotCode = (raw: string) => {
+                        const mt = raw.match(/^([A-Z0-9]+)/i);
+                        return mt ? mt[1].toUpperCase() : raw;
+                      };
+                      const defaultLot = String(
+                        m.meta?.target_lot ||
+                          project.target_lot ||
+                          (detectedLots[0] ? parseLotCode(detectedLots[0]) : ''),
+                      );
+                      const selectedLot = lotOverrides[m.id] ?? defaultLot;
+                      const hasPlan = project.checklist.length > 0;
+                      return (
+                        <div className="mt-2.5 pt-2.5 border-t border-black/[0.07] dark:border-white/[0.08] space-y-2">
+                          {detectedLots.length > 1 && (
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {detectedLots.map((lotStr) => {
+                                const code = parseLotCode(lotStr);
+                                const active = selectedLot === code;
+                                return (
+                                  <button
+                                    key={lotStr}
+                                    type="button"
+                                    disabled={isRunning}
+                                    onClick={() =>
+                                      setLotOverrides((prev) => ({ ...prev, [m.id]: code }))
+                                    }
+                                    title={lotStr}
+                                    className={`px-2 py-0.5 rounded-full text-[11px] font-medium transition-colors disabled:opacity-50 ${
+                                      active
+                                        ? 'bg-[#007AFF] dark:bg-[#0A84FF] text-white'
+                                        : 'bg-black/[0.06] dark:bg-white/[0.09] text-[#515154] dark:text-[#AEAEB2] hover:bg-black/[0.1] dark:hover:bg-white/[0.14]'
+                                    }`}
+                                  >
+                                    {code}标段
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                          <div className="flex items-center gap-2">
+                            <button
+                              disabled={isRunning}
+                              onClick={() => onTriggerPlan(selectedLot || undefined)}
+                              className={`h-[27px] px-3 rounded-[6px] disabled:opacity-45 text-[12px] font-medium flex items-center gap-1.5 transition-all active:scale-[0.98] ${
+                                hasPlan
+                                  ? 'macos-btn-secondary text-[#1D1D1F] dark:text-[#F5F5F7]'
+                                  : 'macos-btn-primary'
+                              }`}
+                            >
+                              {hasPlan ? (
+                                <RotateCcw className="w-3 h-3" />
+                              ) : (
+                                <Sparkles className="w-3 h-3" />
+                              )}
+                              <span>{hasPlan ? '重新规划' : '生成检查计划'}</span>
+                            </button>
+                            <button
+                              onClick={() => onSwitchInspectorTab('live')}
+                              className="h-[27px] px-2.5 rounded-[6px] macos-btn-secondary text-[#1D1D1F] dark:text-[#F5F5F7] text-[12px] font-medium transition-all active:scale-[0.98]"
+                            >
+                              查看预警
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
                     {/* Inline Plan Action Bar */}
                     {m.msg_type === 'plan_card' && (
                       <div className="mt-2.5 pt-2.5 border-t border-black/[0.07] dark:border-white/[0.08] flex items-center gap-2">
@@ -388,19 +466,29 @@ export const MasterChatPane: React.FC<MasterChatPaneProps> = ({
 
       {/* Bottom Input Composer */}
       <div className="p-3 border-t border-black/[0.06] dark:border-white/[0.07] bg-[#FAFAFC]/70 dark:bg-[#1B1B1F]/70 backdrop-blur-md">
-        {(canConfirmStart ||
+        {(isRunning ||
+          canConfirmStart ||
           canRecheck ||
           (project.tender_doc &&
             project.response_doc &&
             project.checklist.length === 0 &&
             !isRunning)) && (
           <div className="flex items-center gap-1.5 mb-2">
+            {isRunning && (
+              <button
+                onClick={onCancelTask}
+                className="px-2.5 py-1 rounded-full bg-[#FF3B30]/10 dark:bg-[#FF453A]/18 hover:bg-[#FF3B30]/18 dark:hover:bg-[#FF453A]/28 text-[#FF3B30] dark:text-[#FF6961] text-[11.5px] font-medium flex items-center gap-1 transition-colors"
+              >
+                <Square className="w-2.5 h-2.5 fill-current" />
+                <span>停止</span>
+              </button>
+            )}
             {project.tender_doc &&
               project.response_doc &&
               project.checklist.length === 0 &&
               !isRunning && (
                 <button
-                  onClick={() => onSendMessage('生成检查计划')}
+                  onClick={() => onTriggerPlan()}
                   className="px-2.5 py-1 rounded-full bg-[#007AFF]/10 dark:bg-[#0A84FF]/18 hover:bg-[#007AFF]/16 dark:hover:bg-[#0A84FF]/26 text-[#007AFF] dark:text-[#409CFF] text-[11.5px] font-medium transition-colors"
                 >
                   生成清单

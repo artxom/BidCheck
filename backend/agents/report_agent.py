@@ -132,7 +132,7 @@ async def assemble_final_report(project_id: str, response_ast: DocumentAST) -> I
                 system_prompt=REPORT_ASSEMBLER_SYSTEM_PROMPT,
                 user_prompt=assembler_input,
                 temperature=0.1,
-                max_tokens=2000,
+                max_tokens=6144,
             )
             v_raw = str(rep_json.get("overall_verdict", default_verdict)).lower().strip()
             if v_raw in ("ready", "needs_fix", "high_risk"):

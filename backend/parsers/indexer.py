@@ -12,6 +12,7 @@ from typing import Any
 from backend.config import AST_CACHE_DIR, ensure_data_dirs
 from backend.parsers.docx_parser import extract_docx_media_jpeg, parse_docx
 from backend.parsers.models import (
+    CURRENT_AST_VERSION,
     DeterministicFinding,
     DocumentAST,
     MediaRef,
@@ -475,32 +476,84 @@ def build_tender_digest(tender_ast: DocumentAST, target_lot: str | None = None) 
         sec_lines = [f"\n### [{sec.section_id} | {sec.page_label}] {sec.breadcrumb}"]
         if sec.paragraphs:
             p_joined = "\n".join(sec.paragraphs)
-            sec_lines.append(p_joined[:4500])
+            sec_lines.append(p_joined[:8500])
         for tbl in sec.tables:
-            sec_lines.append(f"\n[表格 {tbl.table_id} ({tbl.row_count}行×{tbl.col_count}列)]:\n{tbl.markdown[:5000]}")
+            sec_lines.append(f"\n[表格 {tbl.table_id} ({tbl.row_count}行×{tbl.col_count}列)]:\n{tbl.markdown[:8500]}")
         chunks.append("\n".join(sec_lines))
 
     full_text = "\n".join(chunks)
-    # Cap around 65,000 chars so it comfortably fits mainstream 64k/128k context models
-    return full_text[:65000]
+    # Cap around 55,000 chars so it stays lean yet preserves full Chapter 3 & 4 requirements
+    return full_text[:55000]
 
 
-def build_response_outline_summary(response_ast: DocumentAST) -> str:
-    """Build a compact outline map of the Bid Response Document (section IDs, titles, page ranges, char/table/image counts)."""
+def build_response_outline_summary(response_ast: DocumentAST, compact: bool = True) -> str:
+    """Build a full-document outline map of the Bid Response Document (compact skeleton by default)."""
     lines: list[str] = []
-    for sec in response_ast.sections:
-        indent = "  " * max(0, sec.level - 1)
+
+    def _stats(sec: SectionNode) -> tuple[str, int]:
         tbl_img_cnt = sum(len(t.media_ids) for t in sec.tables)
         img_total = len(sec.media_ids) + tbl_img_cnt
-        stats = []
+        parts: list[str] = []
         if sec.char_count:
-            stats.append(f"{sec.char_count}字")
+            parts.append(f"{sec.char_count}字")
         if sec.tables:
-            stats.append(f"{len(sec.tables)}表")
+            parts.append(f"{len(sec.tables)}表")
         if img_total:
-            stats.append(f"{img_total}图")
-        stat_str = " / ".join(stats) if stats else "空"
-        lines.append(f"{indent}- [{sec.section_id}] {sec.title} ({sec.page_label} | {stat_str})")
+            parts.append(f"{img_total}图")
+        return (" / ".join(parts) if parts else "空"), img_total
+
+    if not compact:
+        for sec in response_ast.sections:
+            indent = "  " * max(0, sec.level - 1)
+            stat_str, _ = _stats(sec)
+            lines.append(f"{indent}- [{sec.section_id}] {sec.title} ({sec.page_label} | {stat_str})")
+        return "\n".join(lines)
+
+    sub_buf: list[SectionNode] = []
+
+    def _flush_subs() -> None:
+        if not sub_buf:
+            return
+        p_starts = [s.page_start for s in sub_buf if s.page_start]
+        p_ends = [s.page_end for s in sub_buf if s.page_end]
+        p_s = min(p_starts) if p_starts else None
+        p_e = max(p_ends) if p_ends else p_s
+        p_rng = f"P{p_s}-P{p_e}" if (p_s and p_e and p_s != p_e) else (f"P{p_s}" if p_s else "")
+
+        tot_chars = sum(s.char_count for s in sub_buf)
+        tot_tbls = sum(len(s.tables) for s in sub_buf)
+        tot_imgs = sum(_stats(s)[1] for s in sub_buf)
+        agg_parts: list[str] = []
+        if tot_chars:
+            agg_parts.append(f"{tot_chars}字")
+        if tot_tbls:
+            agg_parts.append(f"{tot_tbls}表")
+        if tot_imgs:
+            agg_parts.append(f"共{tot_imgs}图")
+        agg_str = " / ".join(agg_parts) if agg_parts else "空"
+
+        sample_names = "、".join(s.title[:20] for s in sub_buf[:3])
+        if len(sub_buf) > 3:
+            sample_names += "…"
+        loc_meta = " | ".join(x for x in (p_rng, agg_str) if x)
+        lines.append(f"    ↳ 子节×{len(sub_buf)} ({loc_meta}): {sample_names}")
+
+        for sub in sub_buf:
+            if PLACEHOLDER_PATTERNS.search(sub.title):
+                sub_stat, _ = _stats(sub)
+                lines.append(f"      - [{sub.section_id}] {sub.title} ({sub.page_label} | {sub_stat})")
+        sub_buf.clear()
+
+    for sec in response_ast.sections:
+        if sec.level <= 2:
+            _flush_subs()
+            indent = "  " * max(0, sec.level - 1)
+            stat_str, _ = _stats(sec)
+            lines.append(f"{indent}- [{sec.section_id}] {sec.title} ({sec.page_label} | {stat_str})")
+        else:
+            sub_buf.append(sec)
+
+    _flush_subs()
     return "\n".join(lines)
 
 
@@ -519,10 +572,11 @@ def parse_and_cache_document(
     if cache_file.exists() and not force_reparse:
         try:
             ast = DocumentAST.model_validate_json(cache_file.read_text(encoding="utf-8"))
-            if doc_role == "response" and tender_ast_for_response is not None:
-                run_deterministic_scanners(ast, tender_ast_for_response)
-                cache_file.write_text(ast.model_dump_json(), encoding="utf-8")
-            return ast
+            if ast.ast_version == CURRENT_AST_VERSION:
+                if doc_role == "response" and tender_ast_for_response is not None:
+                    run_deterministic_scanners(ast, tender_ast_for_response)
+                    cache_file.write_text(ast.model_dump_json(), encoding="utf-8")
+                return ast
         except Exception:
             pass
 

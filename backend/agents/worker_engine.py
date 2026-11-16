@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from backend.db import get_project, upsert_checklist_item
+from backend.db import append_message, get_project, upsert_checklist_item
 from backend.llm.gateway import EVENT_BUS, LLM_GATEWAY
 from backend.llm.prompts import TEXT_WORKER_SYSTEM_PROMPT, VISION_WORKER_SYSTEM_PROMPT
 from backend.parsers.indexer import (
@@ -108,7 +108,7 @@ async def _inspect_single_item(
             f"【是否要求图片/扫描件证明】: {'是' if item.requires_vision else '否'}\n\n"
             f"【我方响应文件候选章节内容】:\n{candidates_text}"
             f"{global_det_summary}\n\n"
-            f"【响应文件章节目录速览（辅助确认是否存在其他命名章节）】:\n{outline_brief[:4500]}"
+            f"【响应文件章节目录速览（辅助确认是否存在其他命名章节）】:\n{outline_brief[:8000]}"
         )
 
         res_json, used_model, _ = await LLM_GATEWAY.chat_json(
@@ -117,7 +117,7 @@ async def _inspect_single_item(
             system_prompt=TEXT_WORKER_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             temperature=0.1,
-            max_tokens=1200,
+            max_tokens=4096,
         )
 
         status_raw = str(res_json.get("compliance_status", "partial")).lower().strip()
@@ -207,7 +207,7 @@ async def _inspect_single_item(
                             user_prompt=v_prompt,
                             image_paths=jpeg_paths,
                             temperature=0.1,
-                            max_tokens=500,
+                            max_tokens=2048,
                         )
                         vision_verified = True
                         vision_note = str(v_res.get("vision_note", "")).strip()
@@ -239,6 +239,11 @@ async def _inspect_single_item(
         await EVENT_BUS.emit(project_id, "item_updated", item.model_dump())
         return item
 
+    except asyncio.CancelledError:
+        item.run_status = "pending"
+        upsert_checklist_item(project_id, item)
+        await EVENT_BUS.emit(project_id, "item_updated", item.model_dump())
+        raise
     except Exception as exc:
         elapsed_sec = time.perf_counter() - t_start
         item.run_status = "failed"
@@ -325,7 +330,31 @@ async def execute_inspection_workflow(project_id: str, recheck_only: bool = Fals
                 total_items=total_enabled,
             )
 
-    await asyncio.gather(*(_worker_wrapper(it) for it in target_items))
+    try:
+        await asyncio.gather(*(_worker_wrapper(it) for it in target_items))
 
-    # Assemble final report via Report Assembler Agent
-    await assemble_final_report(project_id, response_ast)
+        # Assemble final report via Report Assembler Agent
+        await assemble_final_report(project_id, response_ast)
+    except asyncio.CancelledError:
+        await EVENT_BUS.sync_and_broadcast_telemetry(
+            project_id,
+            stage="awaiting_confirm",
+            stage_label="已停止",
+        )
+        msg = append_message(project_id, "assistant", "已停止核查任务。", msg_type="text")
+        await EVENT_BUS.emit(project_id, "chat_message", msg.model_dump())
+        raise
+    except Exception as exc:
+        await EVENT_BUS.sync_and_broadcast_telemetry(
+            project_id,
+            stage="error",
+            stage_label="异常",
+        )
+        err_msg = append_message(
+            project_id,
+            "assistant",
+            f"核查执行遇到异常：`{str(exc)[:220]}`",
+            msg_type="error",
+        )
+        await EVENT_BUS.emit(project_id, "chat_message", err_msg.model_dump())
+        raise

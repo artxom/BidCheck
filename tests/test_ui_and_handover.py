@@ -86,7 +86,9 @@ def test_handover_docs_and_gitignore_guardrails() -> None:
         "里程碑交接台账",
         "v0.2.0",
         "v0.3.0",
+        "v0.4.0",
         "/api/settings/models",
+        "/cancel",
     ):
         assert required_section in handover_text
 
@@ -486,4 +488,230 @@ async def test_dynamic_models_api_pricing_and_plan_estimation() -> None:
         _, _, or_cost, _ = aggregate_project_tokens(proj_or.id)
         assert abs(or_cost - 0.01 * USD_TO_CNY_RATE) < 1e-4
     finally:
+        save_settings(orig_settings)
+
+
+@pytest.mark.asyncio
+async def test_zero_token_precheck_and_trimmed_tender_digest() -> None:
+    from backend.parsers.indexer import (
+        build_response_outline_summary,
+        build_tender_digest,
+        parse_and_cache_document,
+    )
+
+    tender_sample = BASE_DIR / "广西北部湾银行大模型应用场景项目（20261009）竞争性磋商采购文件-发布.docx"
+    response_sample = BASE_DIR / "广西北部湾银行大模型应用场景项目（20261009）标号：C -竞争性磋商响应文件-11.10-v3.docx"
+    if not tender_sample.exists() or not response_sample.exists():
+        pytest.skip("Sample docx files not in workspace")
+
+    init_db()
+    tender_ast = parse_and_cache_document(tender_sample, "tender", "ut_v4_tender", force_reparse=True)
+    resp_ast = parse_and_cache_document(
+        response_sample, "response", "ut_v4_resp", tender_ast_for_response=tender_ast, force_reparse=True
+    )
+
+    # 1. Verify Ch5 boilerplate is completely excluded & Ch3/Ch4 non-functional specs are intact
+    digest = build_tender_digest(tender_ast, "C")
+    assert len(digest) < 48_000
+    assert "保密协议" not in digest
+    assert "术语及定义" not in digest
+    assert "十一、非功能需求满足情况表" in digest
+    assert "非功能需求" in digest
+    # Verify non-functional section (>6,000 chars) wasn't truncated at 4,500
+    nonfunc_sec = next(s for s in tender_ast.sections if s.title == "非功能需求")
+    assert nonfunc_sec.char_count > 6000
+    assert nonfunc_sec.paragraphs[-1][:30] in digest
+
+    # 2. Verify compact response outline covers entire 636-page document under 5,000 chars
+    compact_outline = build_response_outline_summary(resp_ast, compact=True)
+    assert len(compact_outline) < 5000
+    assert "其他文书、文件" in compact_outline
+
+    # 3. Verify mounting both documents performs 0 LLM calls and emits precheck_card
+    with (
+        patch("backend.llm.gateway.LLM_GATEWAY.has_configured_key", return_value=True),
+        patch("backend.llm.gateway.LLM_GATEWAY.chat_json", new=AsyncMock()) as mock_chat,
+    ):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r_p = await client.post("/api/projects", json={"name": "零消耗预检测试"})
+            pid = r_p.json()["project"]["id"]
+            await client.post(
+                f"/api/projects/{pid}/documents/mount-local",
+                json={"doc_role": "tender", "filename": tender_sample.name},
+            )
+            r_m2 = await client.post(
+                f"/api/projects/{pid}/documents/mount-local",
+                json={"doc_role": "response", "filename": response_sample.name},
+            )
+            assert r_m2.status_code == 200
+            proj = r_m2.json()["project"]
+            assert mock_chat.call_count == 0
+            assert proj["stage"] == "idle"
+            assert proj["telemetry"]["stage_label"] == "待生成清单"
+            assert proj["target_lot"] == "C"
+            pre_msgs = [m for m in proj["messages"] if m["msg_type"] == "precheck_card"]
+            assert len(pre_msgs) == 1
+            assert pre_msgs[0]["meta"]["target_lot"] == "C"
+            assert len(pre_msgs[0]["meta"]["detected_lots"]) == 4
+            assert pre_msgs[0]["meta"]["est_plan_input_tokens"] > 1000
+
+
+@pytest.mark.asyncio
+async def test_reasoning_truncation_no_retry_effort_fallback_and_cancel() -> None:
+    import asyncio
+    import types
+    import httpx2
+    from openai import BadRequestError
+    from backend.config import MODEL_PRICING_RULES
+    from backend.db import get_settings, save_settings
+    from backend.llm.gateway import LLM_GATEWAY, NonRetryableLLMError
+
+    # Ensure user's "4 不需要，我手工上传价目即可" instruction was respected
+    assert not any("deepseek-v4" in pat.pattern.lower() for pat, _, _ in MODEL_PRICING_RULES)
+
+    init_db()
+    orig_settings = get_settings()
+    try:
+        mod_settings = orig_settings.model_copy(deep=True)
+        mod_settings.providers[0].api_key = "sk-v4-test"
+        mod_settings.routes["master"].provider_id = mod_settings.providers[0].id
+        mod_settings.routes["master"].model = "deepseek-v4-pro"
+        save_settings(mod_settings)
+        LLM_GATEWAY._model_caps["deepseek-v4-pro"] = {"supports_effort": True}
+
+        proj = create_project("截断与取消测试")
+
+        # 1. Truncated reasoning response (finish_reason='length', content='') must NOT retry
+        trunc_usage = types.SimpleNamespace(
+            prompt_tokens=20_000,
+            completion_tokens=6_000,
+            completion_tokens_details=types.SimpleNamespace(reasoning_tokens=6_000),
+        )
+        trunc_resp = types.SimpleNamespace(
+            choices=[
+                types.SimpleNamespace(
+                    finish_reason="length",
+                    message=types.SimpleNamespace(content=""),
+                )
+            ],
+            usage=trunc_usage,
+        )
+        mock_create_trunc = AsyncMock(return_value=trunc_resp)
+        with patch(
+            "backend.llm.gateway.AsyncOpenAI",
+            return_value=types.SimpleNamespace(
+                chat=types.SimpleNamespace(
+                    completions=types.SimpleNamespace(create=mock_create_trunc)
+                )
+            ),
+        ):
+            with pytest.raises(NonRetryableLLMError) as exc_info:
+                await LLM_GATEWAY.chat_json(
+                    project_id=proj.id,
+                    role="master",
+                    system_prompt="sys",
+                    user_prompt="usr",
+                    max_tokens=6000,
+                )
+        assert mock_create_trunc.call_count == 1
+        assert "截断" in str(exc_info.value)
+        assert "6000" in str(exc_info.value)
+
+        # 2. HTTP 400 rejecting reasoning_effort triggers 0-token downgrade & caches capability
+        recorded_kwargs: list[dict] = []
+
+        async def bad_request_then_ok(**kwargs):
+            recorded_kwargs.append(dict(kwargs))
+            if "reasoning_effort" in kwargs:
+                raise BadRequestError(
+                    "Unknown field: reasoning_effort",
+                    response=httpx2.Response(
+                        400,
+                        request=httpx2.Request("POST", "https://api.example.com/v1/chat/completions"),
+                    ),
+                    body=None,
+                )
+            return types.SimpleNamespace(
+                choices=[
+                    types.SimpleNamespace(
+                        finish_reason="stop",
+                        message=types.SimpleNamespace(content='{"ok": true}'),
+                    )
+                ],
+                usage=types.SimpleNamespace(prompt_tokens=100, completion_tokens=20),
+            )
+
+        with patch(
+            "backend.llm.gateway.AsyncOpenAI",
+            return_value=types.SimpleNamespace(
+                chat=types.SimpleNamespace(
+                    completions=types.SimpleNamespace(create=AsyncMock(side_effect=bad_request_then_ok))
+                )
+            ),
+        ):
+            parsed, _, _ = await LLM_GATEWAY.chat_json(
+                project_id=proj.id,
+                role="master",
+                system_prompt="sys",
+                user_prompt="usr",
+            )
+        assert parsed == {"ok": True}
+        assert len(recorded_kwargs) == 2
+        assert recorded_kwargs[0].get("reasoning_effort") == "low"
+        assert "reasoning_effort" not in recorded_kwargs[1]
+        assert LLM_GATEWAY._model_caps["deepseek-v4-pro"].get("rejects_effort") is True
+
+        # 3. Verify /plan failure transitions stage to 'error' (never stuck in 'planning') and /cancel stops running plan
+        tender_sample = BASE_DIR / "广西北部湾银行大模型应用场景项目（20261009）竞争性磋商采购文件-发布.docx"
+        response_sample = BASE_DIR / "广西北部湾银行大模型应用场景项目（20261009）标号：C -竞争性磋商响应文件-11.10-v3.docx"
+        if tender_sample.exists() and response_sample.exists():
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                with patch("backend.llm.gateway.LLM_GATEWAY.has_configured_key", return_value=True):
+                    r_p = await client.post("/api/projects", json={"name": "状态机保护测试"})
+                    pid = r_p.json()["project"]["id"]
+                    await client.post(
+                        f"/api/projects/{pid}/documents/mount-local",
+                        json={"doc_role": "tender", "filename": tender_sample.name},
+                    )
+                    await client.post(
+                        f"/api/projects/{pid}/documents/mount-local",
+                        json={"doc_role": "response", "filename": response_sample.name},
+                    )
+
+                    # 3a. Failed /plan leaves stage='error'
+                    with patch(
+                        "backend.llm.gateway.LLM_GATEWAY.chat_json",
+                        new=AsyncMock(side_effect=NonRetryableLLMError("截断测试")),
+                    ):
+                        r_fail = await client.post(f"/api/projects/{pid}/plan", json={"async_run": False})
+                    assert r_fail.status_code == 400
+                    r_after_fail = await client.get(f"/api/projects/{pid}")
+                    assert r_after_fail.json()["project"]["stage"] == "error"
+
+                    # 3b. Async /plan can be cancelled via /cancel cleanly
+                    started_evt = asyncio.Event()
+
+                    async def slow_chat(**_kwargs):
+                        started_evt.set()
+                        await asyncio.sleep(10)
+                        return ({}, "m", 10)
+
+                    with patch(
+                        "backend.llm.gateway.LLM_GATEWAY.chat_json",
+                        new=AsyncMock(side_effect=slow_chat),
+                    ):
+                        r_start = await client.post(
+                            f"/api/projects/{pid}/plan", json={"async_run": True}
+                        )
+                        assert r_start.status_code == 200
+                        await asyncio.wait_for(started_evt.wait(), timeout=5.0)
+                        r_cancel = await client.post(f"/api/projects/{pid}/cancel")
+                        assert r_cancel.status_code == 200
+                        assert r_cancel.json()["cancelled"] is True
+                        assert r_cancel.json()["project"]["stage"] == "idle"
+                        assert r_cancel.json()["project"]["telemetry"]["stage_label"] == "已停止"
+    finally:
+        LLM_GATEWAY._model_caps.pop("deepseek-v4-pro", None)
         save_settings(orig_settings)

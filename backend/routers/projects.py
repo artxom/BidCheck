@@ -11,7 +11,12 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from backend.agents.master_agent import _estimate_plan_metrics, generate_inspection_plan
+from backend.agents.master_agent import (
+    _estimate_plan_metrics,
+    _load_response_ast_if_cached,
+    cancel_project_task,
+    emit_document_precheck,
+)
 from backend.config import BASE_DIR, UPLOADS_DIR, ensure_data_dirs
 from backend.db import (
     append_message,
@@ -96,6 +101,7 @@ async def _finalize_mounted_doc(project_id: str, doc_role: str, file_path: Path)
     summary = _to_doc_summary(ast)
 
     # If tender was uploaded AFTER response, re-run deterministic cross-checks on response!
+    r_ast: DocumentAST | None = None
     updated_resp_summary: DocumentSummary | None = None
     if doc_role == "tender" and proj.response_doc:
         r_path = proj.response_doc.metadata.get("source_path", "")
@@ -123,7 +129,7 @@ async def _finalize_mounted_doc(project_id: str, doc_role: str, file_path: Path)
     refreshed = get_project(project_id)
     assert refreshed is not None
 
-    # Auto-trigger Master Agent workflow planning when both docs are ready!
+    # Emit 0-token local precheck card when both docs are ready (await user click before invoking LLM)
     if refreshed.tender_doc and refreshed.response_doc:
         if refreshed.checklist and refreshed.stage == "completed" and doc_role == "response":
             msg = append_message(
@@ -134,26 +140,16 @@ async def _finalize_mounted_doc(project_id: str, doc_role: str, file_path: Path)
             await EVENT_BUS.sync_and_broadcast_telemetry(project_id, stage="awaiting_confirm", stage_label="待复检")
             await EVENT_BUS.emit(project_id, "chat_message", msg.model_dump())
         else:
-            # Launch planning asynchronously so upload HTTP returns fast while chat streams plan!
-            asyncio.create_task(_safe_plan_task(project_id))
+            t_ast_obj = ast if doc_role == "tender" else tender_ast
+            r_ast_obj = ast if doc_role == "response" else r_ast
+            if t_ast_obj is not None and r_ast_obj is not None:
+                await emit_document_precheck(project_id, t_ast_obj, r_ast_obj)
+            else:
+                await EVENT_BUS.sync_and_broadcast_telemetry(project_id, stage="idle", stage_label="待生成清单")
     else:
         await EVENT_BUS.sync_and_broadcast_telemetry(project_id, stage="idle", stage_label="待导入文档")
 
     return {"project": get_project(project_id).model_dump()}  # type: ignore[union-attr]
-
-
-async def _safe_plan_task(project_id: str) -> None:
-    try:
-        await generate_inspection_plan(project_id)
-    except Exception as exc:
-        await EVENT_BUS.sync_and_broadcast_telemetry(project_id, stage="error", stage_label="规划异常")
-        err_msg = append_message(
-            project_id,
-            "assistant",
-            f"生成检查计划时遇到异常：`{str(exc)[:240]}`",
-            msg_type="error",
-        )
-        await EVENT_BUS.emit(project_id, "chat_message", err_msg.model_dump())
 
 
 @router.get("/workspace-samples")
@@ -193,6 +189,7 @@ async def api_get_project(project_id: str) -> dict[str, Any]:
 
 @router.delete("/projects/{project_id}")
 async def api_delete_project(project_id: str) -> dict[str, Any]:
+    await cancel_project_task(project_id)
     ok = delete_project(project_id)
     if not ok:
         raise HTTPException(status_code=404, detail="项目不存在")
@@ -249,7 +246,10 @@ async def api_toggle_checklist_item(project_id: str, item_id: str, req: ToggleIt
     target_item.enabled = req.enabled
     upsert_checklist_item(project_id, target_item)
     enabled_cnt = sum(1 for it in proj.checklist if it.enabled)
-    est_tok, est_cost, est_sec = _estimate_plan_metrics(proj.checklist)
+    resp_ast = await asyncio.to_thread(_load_response_ast_if_cached, proj)
+    est_tok, est_cost, est_sec = await asyncio.to_thread(
+        _estimate_plan_metrics, proj.checklist, resp_ast
+    )
     await EVENT_BUS.sync_and_broadcast_telemetry(
         project_id,
         total_items=enabled_cnt,

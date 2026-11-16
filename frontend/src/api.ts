@@ -92,12 +92,21 @@ export const api = {
       body: JSON.stringify({ message }),
     }),
 
-  triggerPlan: (projectId: string, targetLot?: string) =>
-    requestJson<{ message: ChatMessage; project: ProjectDetail }>(`/api/projects/${projectId}/plan`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ target_lot: targetLot || null }),
-    }),
+  triggerPlan: (projectId: string, targetLot?: string, asyncRun = true) =>
+    requestJson<{ started?: boolean; message?: ChatMessage; project: ProjectDetail }>(
+      `/api/projects/${projectId}/plan`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_lot: targetLot || null, async_run: asyncRun }),
+      },
+    ),
+
+  cancelTask: (projectId: string) =>
+    requestJson<{ cancelled: boolean; project: ProjectDetail }>(
+      `/api/projects/${projectId}/cancel`,
+      { method: 'POST' },
+    ),
 
   startRun: (projectId: string, recheckOnly = false) =>
     requestJson<{ started: boolean }>(`/api/projects/${projectId}/run`, {

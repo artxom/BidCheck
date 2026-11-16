@@ -9,6 +9,7 @@ import {
   ChevronDown,
   Sun,
   Moon,
+  Square,
 } from 'lucide-react';
 import type { ProjectDetail, TelemetrySnapshot } from '../types';
 
@@ -20,6 +21,7 @@ interface TopToolbarProps {
   resolvedTheme: 'light' | 'dark';
   onToggleTheme: () => void;
   onOpenSettings: () => void;
+  onCancelTask?: () => void;
 }
 
 function formatDuration(sec: number | null | undefined): string {
@@ -59,6 +61,8 @@ function compactStageLabel(t: TelemetrySnapshot): string {
       return '异常';
     default:
       if (t.stage_label.includes('密钥') || t.stage_label.includes('Key')) return '待配置密钥';
+      if (t.stage_label === '待生成清单') return '待生成清单';
+      if (t.stage_label === '已停止') return '已停止';
       if (t.stage_label.includes('补齐') || t.stage_label.includes('导入')) return '待导入文档';
       return '就绪';
   }
@@ -72,6 +76,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
   resolvedTheme,
   onToggleTheme,
   onOpenSettings,
+  onCancelTask,
 }) => {
   const [showTelemetryPopover, setShowTelemetryPopover] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
@@ -145,143 +150,162 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
 
       {/* Center: Xcode-style Live Activity Capsule */}
       {telemetry && (
-        <div className="relative shrink-0" ref={popRef}>
-          <button
-            onClick={() => setShowTelemetryPopover((v) => !v)}
-            className="h-[28px] px-3 rounded-full macos-capsule flex items-center gap-2.5 text-[11.5px] text-[#1D1D1F] dark:text-[#E5E5EA] tabular-nums transition-all active:scale-[0.99]"
-          >
-            <span className="flex items-center gap-1.5 font-medium">
-              <span className={`w-[7px] h-[7px] rounded-full ${dotColor}`} />
-              <span>{compactStageLabel(telemetry)}</span>
-            </span>
+        <div className="shrink-0 flex items-center gap-1.5">
+          <div className="relative" ref={popRef}>
+            <button
+              onClick={() => setShowTelemetryPopover((v) => !v)}
+              className="h-[28px] px-3 rounded-full macos-capsule flex items-center gap-2.5 text-[11.5px] text-[#1D1D1F] dark:text-[#E5E5EA] tabular-nums transition-all active:scale-[0.99]"
+            >
+              <span className="flex items-center gap-1.5 font-medium">
+                <span className={`w-[7px] h-[7px] rounded-full ${dotColor}`} />
+                <span>{compactStageLabel(telemetry)}</span>
+              </span>
 
-            {telemetry.total_items > 0 && (
-              <>
-                <span className="w-[1px] h-3 bg-black/[0.1] dark:bg-white/[0.12]" />
-                <div className="flex items-center gap-1.5">
-                  <div className="w-14 h-[5px] bg-black/[0.08] dark:bg-white/[0.12] rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-[#007AFF] dark:bg-[#0A84FF] transition-all duration-300 rounded-full"
-                      style={{ width: `${Math.min(100, telemetry.progress_pct)}%` }}
-                    />
+              {telemetry.total_items > 0 && (
+                <>
+                  <span className="w-[1px] h-3 bg-black/[0.1] dark:bg-white/[0.12]" />
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-14 h-[5px] bg-black/[0.08] dark:bg-white/[0.12] rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-[#007AFF] dark:bg-[#0A84FF] transition-all duration-300 rounded-full"
+                        style={{ width: `${Math.min(100, telemetry.progress_pct)}%` }}
+                      />
+                    </div>
+                    <span className="text-[11px] text-[#6E6E73] dark:text-[#98989D]">
+                      {telemetry.progress_pct.toFixed(0)}%
+                    </span>
                   </div>
-                  <span className="text-[11px] text-[#6E6E73] dark:text-[#98989D]">
-                    {telemetry.progress_pct.toFixed(0)}%
-                  </span>
-                </div>
-              </>
-            )}
+                </>
+              )}
 
-            {isBusy && telemetry.eta_seconds !== null ? (
-              <>
-                <span className="w-[1px] h-3 bg-black/[0.1] dark:bg-white/[0.12]" />
-                <span className="text-[11px] text-[#6E6E73] dark:text-[#98989D]">
-                  -{formatDuration(telemetry.eta_seconds)}
-                </span>
-              </>
-            ) : (
-              stage === 'awaiting_confirm' &&
-              telemetry.estimated_plan_seconds > 0 && (
+              {isBusy && telemetry.eta_seconds !== null && telemetry.eta_seconds > 0 ? (
                 <>
                   <span className="w-[1px] h-3 bg-black/[0.1] dark:bg-white/[0.12]" />
                   <span className="text-[11px] text-[#6E6E73] dark:text-[#98989D]">
-                    ~{formatDuration(telemetry.estimated_plan_seconds)}
+                    -{formatDuration(telemetry.eta_seconds)}
                   </span>
                 </>
-              )
-            )}
-
-            <span className="w-[1px] h-3 bg-black/[0.1] dark:bg-white/[0.12]" />
-            <span className="text-[11px] text-[#515154] dark:text-[#AEAEB2] flex items-center gap-1">
-              <Activity className="w-3 h-3 text-[#007AFF] dark:text-[#0A84FF]" />
-              <span>{formatTokens(telemetry.total_tokens)}</span>
-              <span className="text-[#8E8E93] dark:text-[#636366]">·</span>
-              <span>{formatCost(telemetry.estimated_cost)}</span>
-              {activeCallSum > 0 && (
-                <span className="ml-0.5 px-1.5 py-[0.5px] rounded-full bg-[#007AFF] dark:bg-[#0A84FF] text-white text-[10px] font-medium">
-                  {activeCallSum}
-                </span>
-              )}
-            </span>
-          </button>
-
-          {showTelemetryPopover && (
-            <div className="absolute left-1/2 -translate-x-1/2 mt-2 w-[336px] rounded-[12px] macos-popover p-3 text-[12px] z-50">
-              <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-black/[0.06] dark:border-white/[0.08]">
-                <span className="font-semibold text-[#1D1D1F] dark:text-[#F5F5F7]">模型用量</span>
-                <span className="text-[11px] text-[#6E6E73] dark:text-[#98989D] tabular-nums">
-                  {formatDuration(telemetry.elapsed_seconds)}
-                </span>
-              </div>
-
-              <div className="grid grid-cols-3 gap-2 mb-2.5 tabular-nums">
-                <div className="macos-well rounded-[8px] p-2">
-                  <div className="text-[10px] text-[#8E8E93] dark:text-[#8E8E93]">输入</div>
-                  <div className="text-[13px] font-semibold text-[#1D1D1F] dark:text-[#F5F5F7] mt-0.5">
-                    {formatTokens(telemetry.prompt_tokens)}
-                  </div>
-                </div>
-                <div className="macos-well rounded-[8px] p-2">
-                  <div className="text-[10px] text-[#8E8E93] dark:text-[#8E8E93]">输出</div>
-                  <div className="text-[13px] font-semibold text-[#1D1D1F] dark:text-[#F5F5F7] mt-0.5">
-                    {formatTokens(telemetry.completion_tokens)}
-                  </div>
-                </div>
-                <div className="macos-well rounded-[8px] p-2">
-                  <div className="text-[10px] text-[#8E8E93] dark:text-[#8E8E93]">费用</div>
-                  <div className="text-[13px] font-semibold text-[#007AFF] dark:text-[#409CFF] mt-0.5">
-                    ¥{telemetry.estimated_cost.toFixed(4)}
-                  </div>
-                </div>
-              </div>
-
-              {telemetry.active_models.length === 0 ? (
-                <div className="text-center py-2.5 text-[#8E8E93] text-[11.5px]">暂无记录</div>
+              ) : isBusy ? (
+                <>
+                  <span className="w-[1px] h-3 bg-black/[0.1] dark:bg-white/[0.12]" />
+                  <span className="text-[11px] text-[#6E6E73] dark:text-[#98989D]">
+                    {formatDuration(telemetry.elapsed_seconds)}
+                  </span>
+                </>
               ) : (
-                <div className="space-y-1.5">
-                  {telemetry.active_models.map((m) => (
-                    <div
-                      key={`${m.role}-${m.model}`}
-                      className="flex items-center justify-between px-2.5 py-1.5 rounded-[7px] macos-well tabular-nums"
-                    >
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <span
-                            className={`w-1.5 h-1.5 rounded-full ${
-                              m.active_calls > 0
-                                ? 'bg-[#007AFF] dark:bg-[#0A84FF] animate-ping'
-                                : 'bg-[#34C759] dark:bg-[#30D158]'
-                            }`}
-                          />
-                          <span className="font-medium text-[#1D1D1F] dark:text-[#F5F5F7] truncate">
-                            {m.role_label}
-                          </span>
-                        </div>
-                        <div className="text-[10.5px] text-[#8E8E93] font-mono truncate">{m.model}</div>
-                      </div>
-                      <div className="text-right shrink-0 ml-2">
-                        <div className="text-[11px] font-medium text-[#1D1D1F] dark:text-[#F5F5F7]">
-                          {formatTokens(m.total_tokens)} · {m.total_calls}次
-                        </div>
-                        <div className="text-[10px] text-[#8E8E93]">
-                          {m.active_calls > 0 ? `并发 ${m.active_calls}` : `¥${m.cost.toFixed(4)}`}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                stage === 'awaiting_confirm' &&
+                telemetry.estimated_plan_seconds > 0 && (
+                  <>
+                    <span className="w-[1px] h-3 bg-black/[0.1] dark:bg-white/[0.12]" />
+                    <span className="text-[11px] text-[#6E6E73] dark:text-[#98989D]">
+                      ~{formatDuration(telemetry.estimated_plan_seconds)}
+                    </span>
+                  </>
+                )
               )}
 
-              {telemetry.estimated_plan_tokens > 0 && (
-                <div className="mt-2.5 pt-2 border-t border-black/[0.06] dark:border-white/[0.08] flex items-center justify-between text-[11px] text-[#8E8E93] tabular-nums">
-                  <span>计划预估</span>
-                  <span>
-                    ~{formatTokens(telemetry.estimated_plan_tokens)} · ~
-                    {formatCost(telemetry.estimated_plan_cost ?? 0)}
+              <span className="w-[1px] h-3 bg-black/[0.1] dark:bg-white/[0.12]" />
+              <span className="text-[11px] text-[#515154] dark:text-[#AEAEB2] flex items-center gap-1">
+                <Activity className="w-3 h-3 text-[#007AFF] dark:text-[#0A84FF]" />
+                <span>{formatTokens(telemetry.total_tokens)}</span>
+                <span className="text-[#8E8E93] dark:text-[#636366]">·</span>
+                <span>{formatCost(telemetry.estimated_cost)}</span>
+                {activeCallSum > 0 && (
+                  <span className="ml-0.5 px-1.5 py-[0.5px] rounded-full bg-[#007AFF] dark:bg-[#0A84FF] text-white text-[10px] font-medium">
+                    {activeCallSum}
+                  </span>
+                )}
+              </span>
+            </button>
+
+            {showTelemetryPopover && (
+              <div className="absolute left-1/2 -translate-x-1/2 mt-2 w-[336px] rounded-[12px] macos-popover p-3 text-[12px] z-50">
+                <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-black/[0.06] dark:border-white/[0.08]">
+                  <span className="font-semibold text-[#1D1D1F] dark:text-[#F5F5F7]">模型用量</span>
+                  <span className="text-[11px] text-[#6E6E73] dark:text-[#98989D] tabular-nums">
+                    {formatDuration(telemetry.elapsed_seconds)}
                   </span>
                 </div>
-              )}
-            </div>
+
+                <div className="grid grid-cols-3 gap-2 mb-2.5 tabular-nums">
+                  <div className="macos-well rounded-[8px] p-2">
+                    <div className="text-[10px] text-[#8E8E93] dark:text-[#8E8E93]">输入</div>
+                    <div className="text-[13px] font-semibold text-[#1D1D1F] dark:text-[#F5F5F7] mt-0.5">
+                      {formatTokens(telemetry.prompt_tokens)}
+                    </div>
+                  </div>
+                  <div className="macos-well rounded-[8px] p-2">
+                    <div className="text-[10px] text-[#8E8E93] dark:text-[#8E8E93]">输出</div>
+                    <div className="text-[13px] font-semibold text-[#1D1D1F] dark:text-[#F5F5F7] mt-0.5">
+                      {formatTokens(telemetry.completion_tokens)}
+                    </div>
+                  </div>
+                  <div className="macos-well rounded-[8px] p-2">
+                    <div className="text-[10px] text-[#8E8E93] dark:text-[#8E8E93]">费用</div>
+                    <div className="text-[13px] font-semibold text-[#007AFF] dark:text-[#409CFF] mt-0.5">
+                      ¥{telemetry.estimated_cost.toFixed(4)}
+                    </div>
+                  </div>
+                </div>
+
+                {telemetry.active_models.length === 0 ? (
+                  <div className="text-center py-2.5 text-[#8E8E93] text-[11.5px]">暂无记录</div>
+                ) : (
+                  <div className="space-y-1.5">
+                    {telemetry.active_models.map((m) => (
+                      <div
+                        key={`${m.role}-${m.model}`}
+                        className="flex items-center justify-between px-2.5 py-1.5 rounded-[7px] macos-well tabular-nums"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className={`w-1.5 h-1.5 rounded-full ${
+                                m.active_calls > 0
+                                  ? 'bg-[#007AFF] dark:bg-[#0A84FF] animate-ping'
+                                  : 'bg-[#34C759] dark:bg-[#30D158]'
+                              }`}
+                            />
+                            <span className="font-medium text-[#1D1D1F] dark:text-[#F5F5F7] truncate">
+                              {m.role_label}
+                            </span>
+                          </div>
+                          <div className="text-[10.5px] text-[#8E8E93] font-mono truncate">{m.model}</div>
+                        </div>
+                        <div className="text-right shrink-0 ml-2">
+                          <div className="text-[11px] font-medium text-[#1D1D1F] dark:text-[#F5F5F7]">
+                            {formatTokens(m.total_tokens)} · {m.total_calls}次
+                          </div>
+                          <div className="text-[10px] text-[#8E8E93]">
+                            {m.active_calls > 0 ? `并发 ${m.active_calls}` : `¥${m.cost.toFixed(4)}`}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {telemetry.estimated_plan_tokens > 0 && (
+                  <div className="mt-2.5 pt-2 border-t border-black/[0.06] dark:border-white/[0.08] flex items-center justify-between text-[11px] text-[#8E8E93] tabular-nums">
+                    <span>计划预估</span>
+                    <span>
+                      ~{formatTokens(telemetry.estimated_plan_tokens)} · ~
+                      {formatCost(telemetry.estimated_plan_cost ?? 0)}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {isBusy && onCancelTask && (
+            <button
+              onClick={onCancelTask}
+              title="停止当前任务"
+              className="w-6 h-6 rounded-full macos-btn-secondary text-[#FF3B30] dark:text-[#FF453A] flex items-center justify-center transition-all active:scale-95"
+            >
+              <Square className="w-2.5 h-2.5 fill-current" />
+            </button>
           )}
         </div>
       )}
