@@ -14,6 +14,9 @@ from backend.db import init_db
 from backend.routers import chat_stream, projects, reports, settings
 
 
+APP_VERSION = "0.5.0"
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     ensure_data_dirs()
@@ -23,7 +26,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="BidGuard 标书智检",
-    version="0.2.0",
+    version=APP_VERSION,
     lifespan=lifespan,
 )
 
@@ -43,7 +46,7 @@ app.include_router(reports.router)
 
 @app.get("/api/health")
 async def health_check() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "app": "bidguard", "version": APP_VERSION}
 
 
 if FRONTEND_DIST_DIR.exists():
@@ -51,12 +54,14 @@ if FRONTEND_DIST_DIR.exists():
     if assets_dir.exists():
         app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
+    _FRONTEND_ROOT = FRONTEND_DIST_DIR.resolve()
+
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_spa(full_path: str):
         if full_path.startswith("api/"):
             return JSONResponse({"detail": "Not Found"}, status_code=404)
         candidate = (FRONTEND_DIST_DIR / full_path).resolve()
-        if full_path and candidate.is_file() and str(candidate).startswith(str(FRONTEND_DIST_DIR.resolve())):
+        if full_path and candidate.is_file() and candidate.is_relative_to(_FRONTEND_ROOT):
             return FileResponse(candidate)
         index_html = FRONTEND_DIST_DIR / "index.html"
         if index_html.exists():

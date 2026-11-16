@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import os
 import re
+import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -95,14 +98,78 @@ def infer_vision_capability(model_id: str, raw_item: dict[str, Any] | None = Non
         )
     )
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = Path(os.environ.get("BIDGUARD_DATA_DIR", str(BASE_DIR / "data")))
-DB_PATH = DATA_DIR / "bidguard.db"
-UPLOADS_DIR = DATA_DIR / "uploads"
-AST_CACHE_DIR = DATA_DIR / "ast_cache"
-MEDIA_CACHE_DIR = DATA_DIR / "media_cache"
-REPORTS_DIR = DATA_DIR / "reports"
-FRONTEND_DIST_DIR = BASE_DIR / "frontend" / "dist"
+def _is_dir_writable(path: Path) -> bool:
+    """Return True if a directory can be written to (Windows-safe ACL check)."""
+    if path.exists():
+        try:
+            with tempfile.NamedTemporaryFile(dir=path, prefix=".bidguard_wtest_", delete=True):
+                return True
+        except OSError:
+            return False
+    parent = path.parent
+    return os.access(parent, os.W_OK) if parent.exists() else True
+
+
+def resolve_runtime_paths(
+    is_frozen: bool | None = None,
+    meipass: str | Path | None = None,
+    executable: str | Path | None = None,
+    env: Mapping[str, str] | None = None,
+) -> dict[str, Path]:
+    """Resolve runtime resource and writable data directories for source or PyInstaller frozen execution."""
+    frozen = bool(getattr(sys, "frozen", False)) if is_frozen is None else is_frozen
+    env_map = os.environ if env is None else env
+    repo_root = Path(__file__).resolve().parent.parent
+    exe_dir = Path(executable or sys.executable).resolve().parent
+
+    base_dir = exe_dir if frozen else repo_root
+    bundle_dir = Path(meipass or getattr(sys, "_MEIPASS", base_dir)).resolve() if frozen else repo_root
+
+    frontend_dist = bundle_dir / "frontend" / "dist"
+    if not frontend_dist.exists() and (base_dir / "frontend" / "dist").exists():
+        frontend_dist = base_dir / "frontend" / "dist"
+
+    env_data_dir = (env_map.get("BIDGUARD_DATA_DIR") or "").strip()
+    if env_data_dir:
+        data_dir = Path(env_data_dir)
+    elif frozen:
+        candidate = base_dir / "data"
+        if candidate.exists():
+            writable = _is_dir_writable(candidate)
+        else:
+            writable = _is_dir_writable(base_dir)
+        if writable:
+            data_dir = candidate
+        else:
+            local_base = Path(env_map.get("LOCALAPPDATA") or Path.home())
+            data_dir = local_base / "BidGuard" / "data"
+    else:
+        data_dir = base_dir / "data"
+
+    return {
+        "BUNDLE_DIR": bundle_dir,
+        "BASE_DIR": base_dir,
+        "DATA_DIR": data_dir,
+        "DB_PATH": data_dir / "bidguard.db",
+        "UPLOADS_DIR": data_dir / "uploads",
+        "AST_CACHE_DIR": data_dir / "ast_cache",
+        "MEDIA_CACHE_DIR": data_dir / "media_cache",
+        "REPORTS_DIR": data_dir / "reports",
+        "FRONTEND_DIST_DIR": frontend_dist,
+    }
+
+
+IS_FROZEN: bool = bool(getattr(sys, "frozen", False))
+_PATHS = resolve_runtime_paths()
+BUNDLE_DIR: Path = _PATHS["BUNDLE_DIR"]
+BASE_DIR: Path = _PATHS["BASE_DIR"]
+DATA_DIR: Path = _PATHS["DATA_DIR"]
+DB_PATH: Path = _PATHS["DB_PATH"]
+UPLOADS_DIR: Path = _PATHS["UPLOADS_DIR"]
+AST_CACHE_DIR: Path = _PATHS["AST_CACHE_DIR"]
+MEDIA_CACHE_DIR: Path = _PATHS["MEDIA_CACHE_DIR"]
+REPORTS_DIR: Path = _PATHS["REPORTS_DIR"]
+FRONTEND_DIST_DIR: Path = _PATHS["FRONTEND_DIST_DIR"]
 
 
 def ensure_data_dirs() -> None:

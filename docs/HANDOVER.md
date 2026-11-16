@@ -2,9 +2,10 @@
 
 > **文档定位**：本文件为项目的**权威工程交接基准（Single Source of Truth）**。依据项目维护铁律，**每次阶段性开发或优化执行完毕后，必须通过全部自动化测试、同步更新本交接文档的架构说明与第八章《里程碑交接台账》，并提交同步至 GitHub 远端仓库。**
 
-- **当前版本**：`v0.4.0`
+- **当前版本**：`v0.5.0`
 - **主干分支**：`main`
-- **技术栈**：Python 3.11+ / FastAPI / SQLite (WAL) / lxml / PyMuPDF / AsyncOpenAI + React 19 / TypeScript / Vite 6 / Tailwind CSS v4
+- **远端仓库**：`https://github.com/artxom/BidCheck.git`
+- **技术栈**：Python 3.11+ / FastAPI / SQLite (WAL) / lxml / PyMuPDF / AsyncOpenAI + React 19 / TypeScript / Vite 6 / Tailwind CSS v4 + PyInstaller (`--onedir`) & GitHub Actions Windows CI
 
 ---
 
@@ -56,8 +57,9 @@
 
 | 路径 | 核心职责 |
 | :--- | :--- |
-| `backend/main.py` | FastAPI 生命周期初始化、CORS、挂载四大 API 路由及托管 `frontend/dist` 单页应用 |
-| `backend/config.py` | 运行时目录定义、8 家主流模型供应商预设、参考单价目录（`MODEL_PRICING_RULES`）、视觉能力推断（`infer_vision_capability`）与四角色定义 |
+| `launcher.py` | 独立桌面启动器：Windows 无控制台流重定向、`find_available_port` 端口探测、Edge `--app=` 独立窗口与 `tkinter` 控制窗、CI `--self-test` 冒烟验证 |
+| `backend/main.py` | FastAPI 生命周期初始化（`APP_VERSION` / `/api/health`）、CORS、挂载四大 API 路由及托管 `frontend/dist` 单页应用 |
+| `backend/config.py` | `resolve_runtime_paths` 源码/PyInstaller `_MEIPASS` 冻结双模式路径解析、8 家主流模型供应商预设、参考单价目录（`MODEL_PRICING_RULES`）、视觉能力推断（`infer_vision_capability`）与四角色定义 |
 | `backend/schemas.py` | Pydantic 核心契约（`AppSettings`、`ChecklistItem`、`TelemetrySnapshot` 含 `estimated_plan_cost`、`InspectionReport`、`ProjectDetail`） |
 | `backend/db.py` | SQLite WAL 连接池锁管理、项目 CRUD、检查项断点持久化、会话历史与 `token_ledger` 聚合统计 |
 | `backend/parsers/docx_parser.py` | 原生 OOXML 流式解析段落/表格/`<a:blip>` 图片引用，章节树状态机保护（防普通 `附件：` 或标段子标题越权弹出章节点），结合目录 `PAGEREF` 锚定页码并懒转码压缩 JPEG |
@@ -70,6 +72,8 @@
 | `backend/agents/report_agent.py` | 全局响应统计、就绪度评分计算、封标风险结论汇编（含无 API 异常时的确定性兜底报告） |
 | `backend/exporters/docx_exporter.py` | 使用 `python-docx` 生成正式排版 Word 核查报告（总体结论、优先整改、固有预警、逐项明细表） |
 | `backend/exporters/xlsx_exporter.py` | 使用 `openpyxl` 生成双 Sheet Excel 整改销项表（问题项自动置顶、状态着色、责任人认领列与自动筛选） |
+| `packaging/` & `scripts/build_windows.ps1` | Windows `.ico` 多尺寸图标生成、`packaging/bidguard.spec`（`--onedir` 捆绑 `frontend/dist` / `docx` / `certifi` / `pymupdf`）与本地一键打 `BidGuard-Windows-x64.zip` |
+| `.github/workflows/release.yml` | GitHub Actions `windows-latest` 流水线：前端编译 → `pytest` 门禁 → PyInstaller 打包 → `BidGuard.exe --self-test` 冒烟 → 自动发布 `BidGuard-Windows-x64.zip` 至 GitHub Release |
 | `backend/routers/*.py` | `projects.py`（8MB 流式上传、样本挂载、章节/图片预览）、`chat_stream.py`（对话、运行、SSE）、`reports.py`（导出）、`settings.py`（配置与连通性测试） |
 
 ### 2.3 前端代码模块清单
@@ -160,6 +164,19 @@ cd frontend && npm run dev
 .venv/bin/pytest -v
 ```
 
+### 4.4 Windows 免 Python 独立打包与 GitHub 自动发版（`v0.5.0`）
+1. **运行时双路径契约（`backend/config.py`）**：
+   - **只读静态资产（`FRONTEND_DIST_DIR`）**：冻结态（`sys.frozen`）下解析自 `sys._MEIPASS/frontend/dist`；
+   - **可写业务数据（`DATA_DIR`）**：优先使用可执行文件同级的 `data/`（便携绿色存储，升级保留 `data/` 即可保留全部项目与设置），若目录只读（如安装在 `Program Files`）自动回退至 `%LOCALAPPDATA%\BidGuard\data`（亦支持 `BIDGUARD_DATA_DIR` 覆盖）。
+2. **本地 Windows 打包命令**：
+   ```powershell
+   pip install -e ".[dev,packaging]"
+   pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build_windows.ps1
+   ```
+   产出位于 `release/BidGuard-Windows-x64.zip`（与 `.sha256`），打包前会自动启动编译完成的 `dist/BidGuard/BidGuard.exe --self-test` 验证 SPA 托管、核心 API 及 Word/PDF/Excel 依赖库。
+3. **GitHub Actions 自动发版（`.github/workflows/release.yml`）**：
+   - 推送任意 `v*` 标签（如 `git tag -a v0.5.0 -m "Release v0.5.0" && git push origin v0.5.0`）、在 GitHub 网页端发布 Release，或手动触发 `workflow_dispatch`（填入 `release_tag`），均会在 `windows-latest` 上完成全量编译测试并将 `BidGuard-Windows-x64.zip`（含 SHA256）自动附加到对应的 GitHub Release。
+
 ---
 
 ## 五、安全与保密红线（严禁入库清单）
@@ -192,39 +209,16 @@ cd frontend && npm run dev
 
 ## 七、GitHub 仓库首次绑定与日常同步指南
 
-当前本地仓库已在 `main` 分支完成所有里程碑提交。由于您已准备好自己的 GitHub 仓库，请按以下指引完成绑定与推送：
+本项目已绑定远端仓库 **`https://github.com/artxom/BidCheck.git`**（默认通过 HTTPS 443 推送；如已配置 GitHub SSH 密钥并需切换为 SSH，可执行 `git remote set-url origin git@github.com:artxom/BidCheck.git`）。
 
-### 7.1 首次关联您的 GitHub 远端仓库
+### 7.1 发布新版本并触发 Windows 自动打包（Releases）
 
-先在终端进入项目根目录：
+每当需要发布新版本（生成免 Python 安装的 `BidGuard-Windows-x64.zip` 下载包）时，只需在 `main` 分支创建并推送语义化版本标签：
 ```bash
-cd /Users/artxom/code/标书检查工具
+git tag -a v0.5.1 -m "Release v0.5.1"
+git push origin v0.5.1
 ```
-
-在您的 GitHub 仓库页面复制仓库地址（推荐使用 **SSH** 如 `git@github.com:您的用户名/仓库名.git`，或 **HTTPS** 如 `https://github.com/您的用户名/仓库名.git`），执行：
-
-```bash
-# 1. 绑定远端仓库地址（请将下方 URL 替换为您的真实 GitHub 仓库地址）
-git remote add origin <您的_GitHub_仓库地址>
-
-# 2. 确认远端地址绑定无误
-git remote -v
-```
-
-#### 情况 A：您的 GitHub 仓库是新建的空仓库（创建时未勾选 README / .gitignore / License）
-直接推送并绑定上游分支即可：
-```bash
-git branch -M main
-git push -u origin main
-```
-
-#### 情况 B：您的 GitHub 仓库创建时已自动生成了初始文件（如 README.md 或 LICENSE）
-若直接 `git push` 提示 `rejected (fetch first)`，请先拉取合并远端初始提交（保留本地我们已撰写的完整 `README.md` 与 `.gitignore`），再推送：
-```bash
-git fetch origin
-git merge origin/main --allow-unrelated-histories -X ours -m "chore: merge initial GitHub repository history"
-git push -u origin main
-```
+或在 GitHub 仓库主页 **Releases -> Draft a new release** 直接创建标签并点击 **Publish release**，GitHub Actions 将在约 3–5 分钟内自动将 `BidGuard-Windows-x64.zip` 与校验文件上传至该 Release。
 
 ### 7.2 后续每次阶段迭代后的日常同步命令
 
@@ -254,6 +248,24 @@ git log --oneline -n 5
 ---
 
 ## 八、里程碑交接台账（Milestone Handover Log）
+
+### Milestone 5 — `v0.5.0`（2026-11-16）
+- **阶段目标**：补齐独立免 Python 的 Windows 桌面可执行打包能力、建立 GitHub Actions 自动发版 Release 流水线（产出 `BidGuard-Windows-x64.zip`），并完成 GitHub 远端库（`artxom/BidCheck`）起始版本上传。
+- **核心变更内容**：
+  1. **冻结运行时适配（`backend/config.py` / `backend/main.py` / `backend/exporters/docx_exporter.py`）**：新增 `resolve_runtime_paths`，自动识别 PyInstaller `_MEIPASS` 只读前端资产目录与可执行文件同级便携 `data/` 目录（含只读目录向 `%LOCALAPPDATA%\BidGuard\data` 安全回退）；修正 SPA `is_relative_to` 路径校检与 Windows Word 导出默认微软雅黑字体；`/api/health` 新增 `app` 与 `version` 字段。
+  2. **独立桌面启动器与打包工程（`launcher.py` / `packaging/` / `scripts/build_windows.ps1`）**：实现无控制台日志兜底重定向、端口自动探测、Edge `--app=` 独立应用窗打开（含默认浏览器降级）、紧凑 `tkinter` 托盘控制窗及 `--self-test` 冒烟模式；完成多分辨率 `.ico` 图标生成脚本、PyInstaller `--onedir` `.spec` 与一键打 zip + SHA256 的 PowerShell 脚本（禁止将运行前测试产生的 `data/` 打入发布包）。
+  3. **GitHub Actions 自动发版（`.github/workflows/release.yml`）**：监听 `v*` 标签推送、`release.published` 及 `workflow_dispatch`，在 `windows-latest` 上自动执行前端构建、`pytest` 全量门禁、PyInstaller 打包、`BidGuard.exe --self-test` 实跑校验，并通过 `softprops/action-gh-release@v2` 将 `BidGuard-Windows-x64.zip` 上传至 GitHub Releases。
+  4. **CI 兼容与工程修复（`pyproject.toml` / `.gitignore` / `tests/`）**：补齐 `[build-system]`、`backend*` 包发现声明、显式 `httpx` / `certifi` 与 `packaging` 依赖；修复 `tests/test_ui_and_handover.py` 误引未声明的 `httpx2` 并新增冻结路径、图标生成、`launcher.py --self-test`、无本地样本 CI 合成 `.docx` 解析导出与发版工作流结构验证。
+- **涉及主要文件**：
+  - 新增：`launcher.py`、`packaging/generate_icon.py`、`packaging/bidguard.spec`、`scripts/build_windows.ps1`、`.github/workflows/release.yml`
+  - 修改：`pyproject.toml`、`.gitignore`、`backend/config.py`、`backend/main.py`、`backend/exporters/docx_exporter.py`、`tests/test_ui_and_handover.py`、`README.md`、`docs/HANDOVER.md`
+- **验证记录**：
+  - `(cd frontend && npm run build)` 类型检查与 Vite 生产构建零错误通过
+  - `.venv/bin/pytest -v` 10 项全量自动化测试通过（含 `launcher.py --self-test` 与合成 `.docx`/`.xlsx` 导出测试）
+- **已知边界与下一阶段建议**：
+  - Windows 安装包未做商业 Authenticode 代码签名，首次双击运行若遇 Windows Defender SmartScreen 蓝屏提示，点击「更多信息 -> 仍要运行」即可；macOS 本机无法交叉编译 Windows PE 二进制，实际 `BidGuard.exe` 与 `BidGuard-Windows-x64.zip` 由 GitHub Actions `windows-latest` 云端原生编译与冒烟校验生成。
+
+---
 
 ### Milestone 4 — `v0.4.0`（2026-11-16）
 - **阶段目标**：将双文件上传后的自动规划重构为 0-Token 预检确认闭环，解决推理模型（`deepseek-v4-pro` / `deepseek-flash`）默认思考链耗尽 `max_tokens` 导致的空 JSON 截断与同参盲目重试问题，并修复招标摘要合同泄漏、公共表格误删及目录截断缺陷。

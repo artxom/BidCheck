@@ -18,6 +18,17 @@
 
 ## 快速启动
 
+### 方式一：Windows 免安装独立桌面版（推荐终端用户）
+
+**无需安装 Python 或 Node.js**：
+1. 在 GitHub 仓库右侧 **Releases** 页面下载最新压缩包 `BidGuard-Windows-x64.zip`；
+2. 将压缩包完整解压至任意本地文件夹；
+3. 双击运行 **`BidGuard.exe`**，系统会自动以独立应用窗口（或默认浏览器）启动工作台。
+
+> 如需在本地 Windows 环境自行打包：`pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build_windows.ps1`，产物位于 `release/BidGuard-Windows-x64.zip`。每次推送 `v*` 标签（如 `git tag v0.5.0 && git push origin v0.5.0`）或在 GitHub 页面发布 Release 时，GitHub Actions 会自动编译测试并附带 `BidGuard-Windows-x64.zip` 发布至 Releases。
+
+### 方式二：macOS / Linux 源码一键启动
+
 环境要求：**macOS / Linux**，**Python ≥ 3.11**，**Node.js ≥ 20**。
 
 ```bash
@@ -41,9 +52,10 @@ chmod +x run.sh
 
 ```text
 .
+├── launcher.py              # 独立桌面启动器（支持 Windows 无控制台适配、端口自适应与 --self-test）
 ├── backend/
 │   ├── main.py              # FastAPI 单体入口与静态 SPA 托管
-│   ├── config.py            # 路径常量、主流供应商预设与四角色定义
+│   ├── config.py            # 源码/PyInstaller 冻结双模式路径解析、主流供应商预设与四角色定义
 │   ├── schemas.py           # 全局 Pydantic 数据契约
 │   ├── db.py                # SQLite (WAL) 仓储、断点持久化与 Token 台账
 │   ├── parsers/             # OOXML (.docx) / PDF 解析器、确定性扫描与混合检索器
@@ -52,12 +64,17 @@ chmod +x run.sh
 │   ├── exporters/           # Word 核查报告与 Excel 整改销项表生成器
 │   └── routers/             # 项目/上传、会话/SSE、报告导出、系统设置 API
 ├── frontend/                # React 19 + TypeScript + Tailwind v4 macOS 工作台
-├── tests/                   # 端到端解析、多 Agent 编排、UI 产物与文档门禁测试
+├── packaging/               # Windows 多分辨率 .ico 图标生成与 PyInstaller 打包配置 (.spec)
+├── scripts/
+│   └── build_windows.ps1    # Windows 独立可执行程序与发布 Zip 一键构建脚本
+├── .github/workflows/
+│   └── release.yml          # GitHub Actions 自动构建与 Release 资产发布流水线
+├── tests/                   # 端到端解析、多 Agent 编排、UI 产物、打包自检与文档门禁测试
 ├── docs/
 │   └── HANDOVER.md          # 工程交接手册、迭代 SOP、GitHub 提交流程与版本台账
 ├── AGENTS.md                # 每次迭代强制交接与 GitHub 同步守则
 ├── .env.example             # 可选环境变量模板
-└── run.sh                   # 一键构建与启动脚本
+└── run.sh                   # macOS / Linux 一键构建与启动脚本
 ```
 
 ---

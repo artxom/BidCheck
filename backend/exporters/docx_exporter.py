@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from docx import Document
@@ -18,8 +19,10 @@ from backend.schemas import (
     ProjectDetail,
 )
 
+_DEFAULT_CN_FONT = "Microsoft YaHei" if sys.platform == "win32" else "PingFang SC"
 
-def _set_cn_font(run, font_name: str = "PingFang SC", size_pt: float = 10.5, bold: bool = False, color: RGBColor | None = None) -> None:
+
+def _set_cn_font(run, font_name: str = _DEFAULT_CN_FONT, size_pt: float = 10.5, bold: bool = False, color: RGBColor | None = None) -> None:
     run.font.name = font_name
     run._element.rPr.rFonts.set(qn("w:eastAsia"), font_name)
     run.font.size = Pt(size_pt)

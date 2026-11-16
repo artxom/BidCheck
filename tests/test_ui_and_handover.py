@@ -69,7 +69,7 @@ def test_frontend_bundle_dark_mode_and_restrained_copy() -> None:
 
 def test_handover_docs_and_gitignore_guardrails() -> None:
     gitignore = (BASE_DIR / ".gitignore").read_text(encoding="utf-8")
-    for pattern in ("*.docx", "*.pdf", "*.xlsx", "data/", ".env", "frontend/dist/", "*.tsbuildinfo"):
+    for pattern in ("*.docx", "*.pdf", "*.xlsx", "data/", ".env", "frontend/dist/", "*.tsbuildinfo", "release/", "BidGuard-*.zip"):
         assert pattern in gitignore
 
     agents_md = BASE_DIR / "AGENTS.md"
@@ -87,6 +87,8 @@ def test_handover_docs_and_gitignore_guardrails() -> None:
         "v0.2.0",
         "v0.3.0",
         "v0.4.0",
+        "v0.5.0",
+        "BidGuard-Windows-x64.zip",
         "/api/settings/models",
         "/cancel",
     ):
@@ -561,7 +563,7 @@ async def test_zero_token_precheck_and_trimmed_tender_digest() -> None:
 async def test_reasoning_truncation_no_retry_effort_fallback_and_cancel() -> None:
     import asyncio
     import types
-    import httpx2
+    import httpx
     from openai import BadRequestError
     from backend.config import MODEL_PRICING_RULES
     from backend.db import get_settings, save_settings
@@ -626,9 +628,9 @@ async def test_reasoning_truncation_no_retry_effort_fallback_and_cancel() -> Non
             if "reasoning_effort" in kwargs:
                 raise BadRequestError(
                     "Unknown field: reasoning_effort",
-                    response=httpx2.Response(
+                    response=httpx.Response(
                         400,
-                        request=httpx2.Request("POST", "https://api.example.com/v1/chat/completions"),
+                        request=httpx.Request("POST", "https://api.example.com/v1/chat/completions"),
                     ),
                     body=None,
                 )
@@ -715,3 +717,139 @@ async def test_reasoning_truncation_no_retry_effort_fallback_and_cancel() -> Non
     finally:
         LLM_GATEWAY._model_caps.pop("deepseek-v4-pro", None)
         save_settings(orig_settings)
+
+
+def test_windows_packaging_frozen_paths_and_launcher_selftest(tmp_path) -> None:
+    import importlib.util
+    import json
+    import subprocess
+    import sys
+    import zipfile
+
+    import docx
+
+    from backend.config import resolve_runtime_paths
+    from backend.db import get_project, update_project_fields
+    from backend.exporters.docx_exporter import build_docx_report
+    from backend.exporters.xlsx_exporter import build_xlsx_checklist
+    from backend.parsers.indexer import parse_and_cache_document
+    from backend.schemas import CategoryStat, InspectionReport
+
+    # 1. Simulated PyInstaller frozen runtime paths
+    fake_dir = tmp_path / "portable_bidguard"
+    fake_dir.mkdir(parents=True, exist_ok=True)
+    fake_internal = fake_dir / "_internal"
+    fake_internal.mkdir(parents=True, exist_ok=True)
+    resolved = resolve_runtime_paths(
+        is_frozen=True,
+        meipass=fake_internal,
+        executable=fake_dir / "BidGuard.exe",
+        env={},
+    )
+    assert resolved["FRONTEND_DIST_DIR"] == fake_internal.resolve() / "frontend" / "dist"
+    assert resolved["DATA_DIR"] == fake_dir.resolve() / "data"
+    assert resolved["BASE_DIR"] == fake_dir.resolve()
+
+    # 2. Windows icon generation
+    icon_mod_spec = importlib.util.spec_from_file_location(
+        "bidguard_generate_icon", BASE_DIR / "packaging" / "generate_icon.py"
+    )
+    assert icon_mod_spec is not None and icon_mod_spec.loader is not None
+    icon_mod = importlib.util.module_from_spec(icon_mod_spec)
+    icon_mod_spec.loader.exec_module(icon_mod)
+    ico_path = tmp_path / "bidguard.ico"
+    icon_mod.generate_bidguard_ico(ico_path)
+    assert ico_path.exists() and ico_path.stat().st_size > 1000
+    assert ico_path.read_bytes()[:4] == b"\x00\x00\x01\x00"
+
+    # 3. Launcher standalone --self-test subprocess execution
+    selftest_json = tmp_path / "selftest.json"
+    env = dict(os.environ)
+    env["BIDGUARD_DATA_DIR"] = str(tmp_path / "selftest_data")
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(BASE_DIR / "launcher.py"),
+            "--self-test",
+            "--self-test-out",
+            str(selftest_json),
+        ],
+        cwd=str(BASE_DIR),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert proc.returncode == 0, f"launcher --self-test failed: {proc.stderr}"
+    assert "SELF_TEST_OK" in proc.stdout
+    selftest_payload = json.loads(selftest_json.read_text(encoding="utf-8"))
+    assert selftest_payload["ok"] is True
+
+    # 4. Synthetic .docx parse + Word/Excel export verification (runs on CI without confidential fixtures)
+    init_db()
+    synth_docx = tmp_path / "synthetic_response.docx"
+    doc = docx.Document()
+    doc.add_heading("第一章 资格审查要求", level=1)
+    doc.add_paragraph("已附营业执照副本，系统架构完整。")
+    tbl = doc.add_table(rows=2, cols=2)
+    tbl.cell(0, 0).text = "核查项"
+    tbl.cell(0, 1).text = "响应情况"
+    tbl.cell(1, 0).text = "营业执照"
+    tbl.cell(1, 1).text = "已提供"
+    doc.save(synth_docx)
+
+    ast = parse_and_cache_document(synth_docx, "response", "ut_synth_resp", force_reparse=True)
+    assert len(ast.sections) >= 1
+
+    proj = create_project("CI合成导出测试")
+    item = ChecklistItem(
+        item_id="CHK-SYNTH-1",
+        order_index=0,
+        category="qualification",
+        title="营业执照副本核验",
+        requirement_text="提供营业执照副本",
+        risk_level="fatal",
+        run_status="completed",
+        compliance_status="passed",
+        matched_section_ids=[ast.sections[0].section_id],
+        conclusion="已提供营业执照副本。",
+    )
+    save_checklist(proj.id, [item])
+    rep = InspectionReport(
+        project_id=proj.id,
+        generated_at="2026-11-16T19:30:00",
+        overall_verdict="ready",
+        verdict_label="核查通过，可封标",
+        readiness_score=100,
+        total_items=1,
+        passed_count=1,
+        partial_count=0,
+        missing_count=0,
+        fatal_issue_count=0,
+        deterministic_finding_count=len(ast.deterministic_findings),
+        executive_summary="合成测试文档全部响应。",
+        category_stats=[CategoryStat(category="qualification", label="资格审查", total=1, passed=1)],
+    )
+    update_project_fields(proj.id, report_json=rep.model_dump_json())
+    loaded_proj = get_project(proj.id)
+    assert loaded_proj is not None
+    out_docx = build_docx_report(loaded_proj)
+    out_xlsx = build_xlsx_checklist(loaded_proj)
+    assert out_docx.exists() and out_docx.stat().st_size > 3000
+    assert out_xlsx.exists() and out_xlsx.stat().st_size > 2000
+    with zipfile.ZipFile(out_docx) as z_doc:
+        assert "word/document.xml" in z_doc.namelist()
+    with zipfile.ZipFile(out_xlsx) as z_xls:
+        assert "xl/workbook.xml" in z_xls.namelist()
+
+    # 5. Verify Windows packaging & GitHub Actions release files
+    workflow_file = BASE_DIR / ".github" / "workflows" / "release.yml"
+    spec_file = BASE_DIR / "packaging" / "bidguard.spec"
+    ps_script = BASE_DIR / "scripts" / "build_windows.ps1"
+    assert workflow_file.exists() and spec_file.exists() and ps_script.exists()
+    wf_text = workflow_file.read_text(encoding="utf-8")
+    for expected in ("windows-latest", "BidGuard-Windows-x64.zip", "softprops/action-gh-release"):
+        assert expected in wf_text
+    assert "--self-test" in ps_script.read_text(encoding="utf-8")
+
