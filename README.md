@@ -12,7 +12,7 @@
 - **零 Token 固有红线预警**：内置封面留空、`（待补充）` 占位符、关键表空单元格、采购人抬头/标段防串标错名、空章节及落款签章位确定性扫描，并对大模型结果施加防漏判硬锁。
 - **四角色模型路由与实时遥测**：支持阿里云百炼（通义千问）、DeepSeek、火山豆包、硅基流动、OpenAI、Gemini、OpenRouter 及任意 OpenAI 兼容网关；前台胶囊实时展示进度、并发数、Token 消耗、费用与动态 ETA。
 - **macOS 原生克制体验**：三栏分屏（项目侧栏 · Master 会话 · 实况/报告/原文检视器），精简无冗余提示文案，支持浅色、深色与跟随系统自动切换。
-- **双格式离线交付**：一键导出正式 Word 核查报告（`.docx`）与团队分工整改销项表（`.xlsx`）。
+- **同源交互式单文件 HTML 报告导出**：一键导出与工作台像素级一致的单文件静态 HTML 报告，双击即可在任意浏览器离线完整交互查看报告结论、实况清单、全书章节原文、展开长表格与扫描件大图预览。
 
 ---
 
@@ -61,7 +61,7 @@ chmod +x run.sh
 │   ├── parsers/             # OOXML (.docx) / PDF 解析器、确定性扫描与混合检索器
 │   ├── llm/                 # OpenAI 兼容异步网关、角色并发信号量与 SSE 事件总线
 │   ├── agents/              # Master 主控、并发 Worker 引擎、Report 组装 Agent
-│   ├── exporters/           # Word 核查报告与 Excel 整改销项表生成器
+│   ├── exporters/           # 交互式单文件 HTML 快照报告（及兼容 Word/Excel）导出器
 │   └── routers/             # 项目/上传、会话/SSE、报告导出、系统设置 API
 ├── frontend/                # React 19 + TypeScript + Tailwind v4 macOS 工作台
 ├── packaging/               # Windows 多分辨率 .ico 图标生成与 PyInstaller 打包配置 (.spec)
@@ -93,6 +93,6 @@ chmod +x run.sh
 
 ## 安全与涉密防护说明
 
-本项目 `.gitignore` 已默认拦截所有 `*.docx`、`*.doc`、`*.pdf`、`*.xlsx` 标书文件以及包含 API Key 与解析缓存的 `data/`、`.env` 目录。**严禁使用 `git add -f` 强行提交真实招标文件、投标响应文件或本地数据库。**
+本项目 `.gitignore` 已默认拦截所有 `*.docx`、`*.doc`、`*.pdf`、`*.xlsx`、`*检查报告.html` 标书与报告文件以及包含 API Key 与解析缓存的 `data/`、`.env` 目录。**严禁使用 `git add -f` 强行提交真实招标文件、投标响应文件、导出报告或本地数据库。**
 
 首次关联与同步至 GitHub 仓库请直接参阅 **[docs/HANDOVER.md § 七、GitHub 仓库首次绑定与日常同步指南](docs/HANDOVER.md#七github-仓库首次绑定与日常同步指南)**。

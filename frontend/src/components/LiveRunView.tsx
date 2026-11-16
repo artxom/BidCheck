@@ -22,6 +22,7 @@ interface LiveRunViewProps {
   checklist: ChecklistItem[];
   deterministicFindings: DeterministicFinding[];
   isRunning: boolean;
+  readOnly?: boolean;
   onToggleItem: (itemId: string, enabled: boolean) => void;
   onInspectEvidence: (item: ChecklistItem | null, sectionId?: string) => void;
 }
@@ -38,6 +39,7 @@ export const LiveRunView: React.FC<LiveRunViewProps> = ({
   checklist,
   deterministicFindings,
   isRunning,
+  readOnly = false,
   onToggleItem,
   onInspectEvidence,
 }) => {
@@ -175,7 +177,7 @@ export const LiveRunView: React.FC<LiveRunViewProps> = ({
 
             <div className="rounded-[10px] macos-card divide-y divide-black/[0.05] dark:divide-white/[0.06] overflow-hidden">
               {items.map((it) => {
-                const canToggle = !isRunning && it.run_status === 'pending';
+                const canToggle = !isRunning && !readOnly && it.run_status === 'pending';
                 return (
                   <div
                     key={it.item_id}

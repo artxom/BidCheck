@@ -4,9 +4,7 @@ import {
   SlidersHorizontal,
   Download,
   Activity,
-  FileText,
-  FileSpreadsheet,
-  ChevronDown,
+  Loader2,
   Sun,
   Moon,
   Square,
@@ -22,6 +20,9 @@ interface TopToolbarProps {
   onToggleTheme: () => void;
   onOpenSettings: () => void;
   onCancelTask?: () => void;
+  readOnly?: boolean;
+  exportingHtml?: boolean;
+  onExportHtml?: () => void;
 }
 
 function formatDuration(sec: number | null | undefined): string {
@@ -77,19 +78,17 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
   onToggleTheme,
   onOpenSettings,
   onCancelTask,
+  readOnly = false,
+  exportingHtml = false,
+  onExportHtml,
 }) => {
   const [showTelemetryPopover, setShowTelemetryPopover] = useState(false);
-  const [showExportMenu, setShowExportMenu] = useState(false);
   const popRef = useRef<HTMLDivElement>(null);
-  const expRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (popRef.current && !popRef.current.contains(e.target as Node)) {
         setShowTelemetryPopover(false);
-      }
-      if (expRef.current && !expRef.current.contains(e.target as Node)) {
-        setShowExportMenu(false);
       }
     };
     window.addEventListener('mousedown', handler);
@@ -115,16 +114,22 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
             ? 'bg-[#007AFF] dark:bg-[#0A84FF] animate-pulse'
             : 'bg-[#8E8E93] dark:bg-[#636366]';
 
-  const canExportDocx = Boolean(project?.report);
-  const canExportXlsx = Boolean(project && project.checklist.length > 0);
+  const canExportHtml = Boolean(project && (project.report || project.checklist.length > 0));
+  const sidebarToggleTitle = readOnly
+    ? sidebarOpen
+      ? '收起会话栏 (⌘\\)'
+      : '展开会话栏 (⌘\\)'
+    : sidebarOpen
+      ? '收起侧栏 (⌘\\)'
+      : '展开侧栏 (⌘\\)';
 
   return (
     <header className="h-[44px] shrink-0 macos-toolbar px-3 flex items-center justify-between gap-3 z-30">
       {/* Left: Sidebar toggle + Project Title */}
-      <div className="flex-1 flex items-center gap-2 min-w-0">
+      <div className="flex-1 flex items-center gap-2 min-w-0 overflow-hidden">
         <button
           onClick={onToggleSidebar}
-          title={sidebarOpen ? '收起侧栏 (⌘\\)' : '展开侧栏 (⌘\\)'}
+          title={sidebarToggleTitle}
           className={`w-7 h-7 rounded-[6px] shrink-0 flex items-center justify-center transition-colors ${
             sidebarOpen
               ? 'text-[#1D1D1F] dark:text-[#F5F5F7] bg-black/[0.05] dark:bg-white/[0.07]'
@@ -141,8 +146,13 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
             {project?.name || '标书智检'}
           </span>
           {project?.target_lot && (
-            <span className="px-1.5 py-[1px] text-[10.5px] font-semibold rounded-[5px] bg-[#007AFF]/10 dark:bg-[#0A84FF]/18 text-[#007AFF] dark:text-[#409CFF] shrink-0">
+            <span className="hidden sm:inline-flex px-1.5 py-[1px] text-[10.5px] font-semibold rounded-[5px] bg-[#007AFF]/10 dark:bg-[#0A84FF]/18 text-[#007AFF] dark:text-[#409CFF] shrink-0">
               {project.target_lot}标段
+            </span>
+          )}
+          {readOnly && (
+            <span className="hidden md:inline-flex px-1.5 py-[1px] text-[10.5px] font-medium rounded-[5px] bg-black/[0.05] dark:bg-white/[0.08] text-[#6E6E73] dark:text-[#98989D] shrink-0">
+              离线报告
             </span>
           )}
         </div>
@@ -163,8 +173,8 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
 
               {telemetry.total_items > 0 && (
                 <>
-                  <span className="w-[1px] h-3 bg-black/[0.1] dark:bg-white/[0.12]" />
-                  <div className="flex items-center gap-1.5">
+                  <span className="hidden sm:block w-[1px] h-3 bg-black/[0.1] dark:bg-white/[0.12]" />
+                  <div className="hidden sm:flex items-center gap-1.5">
                     <div className="w-14 h-[5px] bg-black/[0.08] dark:bg-white/[0.12] rounded-full overflow-hidden">
                       <div
                         className="h-full bg-[#007AFF] dark:bg-[#0A84FF] transition-all duration-300 rounded-full"
@@ -219,7 +229,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
             </button>
 
             {showTelemetryPopover && (
-              <div className="absolute left-1/2 -translate-x-1/2 mt-2 w-[336px] rounded-[12px] macos-popover p-3 text-[12px] z-50">
+              <div className="fixed sm:absolute top-[50px] sm:top-auto left-1/2 -translate-x-1/2 sm:mt-2 w-[min(336px,calc(100vw-24px))] rounded-[12px] macos-popover p-3 text-[12px] z-50">
                 <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-black/[0.06] dark:border-white/[0.08]">
                   <span className="font-semibold text-[#1D1D1F] dark:text-[#F5F5F7]">模型用量</span>
                   <span className="text-[11px] text-[#6E6E73] dark:text-[#98989D] tabular-nums">
@@ -298,7 +308,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
             )}
           </div>
 
-          {isBusy && onCancelTask && (
+          {!readOnly && isBusy && onCancelTask && (
             <button
               onClick={onCancelTask}
               title="停止当前任务"
@@ -311,53 +321,27 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
       )}
 
       {/* Right: Export + Appearance + Settings */}
-      <div className="flex-1 flex items-center justify-end gap-1.5 shrink-0">
-        {project && (canExportDocx || canExportXlsx) && (
-          <div className="relative" ref={expRef}>
-            <button
-              onClick={() => setShowExportMenu((v) => !v)}
-              className="h-[27px] px-2.5 rounded-[6px] macos-btn-secondary text-[11.5px] font-medium text-[#1D1D1F] dark:text-[#F5F5F7] flex items-center gap-1 transition-all active:scale-[0.98]"
-            >
-              <Download className="w-3.5 h-3.5 text-[#515154] dark:text-[#AEAEB2]" />
-              <span>导出</span>
-              <ChevronDown className="w-3 h-3 text-[#8E8E93]" />
-            </button>
-
-            {showExportMenu && (
-              <div className="absolute right-0 mt-1.5 w-40 rounded-[10px] macos-popover p-1 text-[12px] z-50">
-                <a
-                  href={canExportDocx ? `/api/projects/${project.id}/export/docx` : undefined}
-                  onClick={(e) => {
-                    if (!canExportDocx) e.preventDefault();
-                    else setShowExportMenu(false);
-                  }}
-                  className={`flex items-center gap-2 px-2.5 py-1.5 rounded-[6px] transition-colors ${
-                    canExportDocx
-                      ? 'text-[#1D1D1F] dark:text-[#F5F5F7] hover:bg-[#007AFF] dark:hover:bg-[#0A84FF] hover:text-white'
-                      : 'text-[#C7C7CC] dark:text-[#48484A] cursor-not-allowed'
-                  }`}
-                >
-                  <FileText className="w-3.5 h-3.5" />
-                  <span>Word 报告</span>
-                </a>
-                <a
-                  href={canExportXlsx ? `/api/projects/${project.id}/export/xlsx` : undefined}
-                  onClick={(e) => {
-                    if (!canExportXlsx) e.preventDefault();
-                    else setShowExportMenu(false);
-                  }}
-                  className={`flex items-center gap-2 px-2.5 py-1.5 rounded-[6px] transition-colors ${
-                    canExportXlsx
-                      ? 'text-[#1D1D1F] dark:text-[#F5F5F7] hover:bg-[#007AFF] dark:hover:bg-[#0A84FF] hover:text-white'
-                      : 'text-[#C7C7CC] dark:text-[#48484A] cursor-not-allowed'
-                  }`}
-                >
-                  <FileSpreadsheet className="w-3.5 h-3.5" />
-                  <span>Excel 销项表</span>
-                </a>
-              </div>
+      <div className="sm:flex-1 flex items-center justify-end gap-1.5 shrink-0">
+        {!readOnly && project && canExportHtml && (
+          <button
+            type="button"
+            disabled={exportingHtml}
+            onClick={onExportHtml}
+            title="导出可交互静态 HTML 报告"
+            className="h-[27px] px-2.5 rounded-[6px] macos-btn-secondary text-[11.5px] font-medium text-[#1D1D1F] dark:text-[#F5F5F7] flex items-center gap-1.5 transition-all active:scale-[0.98] disabled:opacity-60"
+          >
+            {exportingHtml ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-[#007AFF] dark:text-[#0A84FF]" />
+                <span>导出中…</span>
+              </>
+            ) : (
+              <>
+                <Download className="w-3.5 h-3.5 text-[#007AFF] dark:text-[#409CFF]" />
+                <span>导出报告</span>
+              </>
             )}
-          </div>
+          </button>
         )}
 
         <button
@@ -372,13 +356,15 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
           )}
         </button>
 
-        <button
-          onClick={onOpenSettings}
-          title="设置 (⌘,)"
-          className="w-7 h-7 rounded-[6px] text-[#515154] dark:text-[#AEAEB2] hover:bg-black/[0.06] dark:hover:bg-white/[0.08] active:scale-[0.96] flex items-center justify-center transition-all"
-        >
-          <SlidersHorizontal className="w-[15px] h-[15px]" />
-        </button>
+        {!readOnly && (
+          <button
+            onClick={onOpenSettings}
+            title="设置 (⌘,)"
+            className="w-7 h-7 rounded-[6px] text-[#515154] dark:text-[#AEAEB2] hover:bg-black/[0.06] dark:hover:bg-white/[0.08] active:scale-[0.96] flex items-center justify-center transition-all"
+          >
+            <SlidersHorizontal className="w-[15px] h-[15px]" />
+          </button>
+        )}
       </div>
     </header>
   );

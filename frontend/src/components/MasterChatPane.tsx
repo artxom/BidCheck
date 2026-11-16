@@ -6,8 +6,7 @@ import {
   Play,
   RotateCcw,
   Sparkles,
-  FileText,
-  FileSpreadsheet,
+  Download,
   Loader2,
   FolderOpen,
   Square,
@@ -27,6 +26,11 @@ interface MasterChatPaneProps {
   onStartRun: (recheckOnly: boolean) => void;
   onCancelTask: () => void;
   onSwitchInspectorTab: (tab: 'live' | 'report' | 'evidence') => void;
+  readOnly?: boolean;
+  exportedAt?: string;
+  exportingHtml?: boolean;
+  onExportHtml?: () => void;
+  className?: string;
 }
 
 function renderFormattedLine(line: string): React.ReactNode {
@@ -83,6 +87,8 @@ interface DocSlotCardProps {
   uploadPct: number;
   onSelectFile: (file: File) => void;
   onSelectSample: (filename: string) => void;
+  readOnly?: boolean;
+  onReadOnlyClick?: () => void;
 }
 
 const DocSlotCard: React.FC<DocSlotCardProps> = ({
@@ -94,6 +100,8 @@ const DocSlotCard: React.FC<DocSlotCardProps> = ({
   uploadPct,
   onSelectFile,
   onSelectSample,
+  readOnly = false,
+  onReadOnlyClick,
 }) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -112,40 +120,56 @@ const DocSlotCard: React.FC<DocSlotCardProps> = ({
 
   const roleSamples = samples.filter((s) => s.guessed_role === role);
   const displaySamples = roleSamples.length > 0 ? roleSamples : samples;
+  const canBrowseResponse = readOnly && role === 'response' && Boolean(doc) && Boolean(onReadOnlyClick);
 
   return (
     <div
+      title={canBrowseResponse ? '浏览响应文件原文' : doc?.filename}
       onDragOver={(e) => {
+        if (readOnly) return;
         e.preventDefault();
         setDragOver(true);
       }}
-      onDragLeave={() => setDragOver(false)}
+      onDragLeave={() => {
+        if (!readOnly) setDragOver(false);
+      }}
       onDrop={(e) => {
+        if (readOnly) return;
         e.preventDefault();
         setDragOver(false);
         const f = e.dataTransfer.files?.[0];
         if (f) onSelectFile(f);
       }}
-      onClick={() => !isUploading && inputRef.current?.click()}
-      className={`relative flex-1 min-w-0 h-[36px] rounded-[8px] px-2.5 flex items-center justify-between gap-2 transition-all cursor-pointer ${
+      onClick={() => {
+        if (readOnly) {
+          if (canBrowseResponse) onReadOnlyClick?.();
+          return;
+        }
+        if (!isUploading) inputRef.current?.click();
+      }}
+      className={`relative flex-1 min-w-0 h-[36px] rounded-[8px] px-2.5 flex items-center justify-between gap-2 transition-all ${
+        readOnly ? (canBrowseResponse ? 'cursor-pointer' : 'cursor-default') : 'cursor-pointer'
+      } ${
         dragOver
           ? 'border border-[#007AFF] dark:border-[#0A84FF] bg-[#007AFF]/[0.06] dark:bg-[#0A84FF]/[0.12]'
           : doc
-            ? 'macos-card hover:border-black/[0.15] dark:hover:border-white/[0.16]'
+            ? `macos-card ${!readOnly || canBrowseResponse ? 'hover:border-black/[0.15] dark:hover:border-white/[0.16]' : ''}`
             : 'border border-dashed border-black/[0.14] dark:border-white/[0.14] bg-black/[0.02] dark:bg-white/[0.025] hover:bg-black/[0.04] dark:hover:bg-white/[0.05]'
       }`}
     >
-      <input
-        ref={inputRef}
-        type="file"
-        accept=".docx,.pdf"
-        className="hidden"
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) onSelectFile(f);
-          e.target.value = '';
-        }}
-      />
+      {!readOnly && (
+        <input
+          ref={inputRef}
+          type="file"
+          accept=".docx,.pdf"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) onSelectFile(f);
+            e.target.value = '';
+          }}
+        />
+      )}
 
       <div className="flex items-center gap-2 min-w-0">
         {isUploading ? (
@@ -165,7 +189,7 @@ const DocSlotCard: React.FC<DocSlotCardProps> = ({
               : 'text-[#8E8E93] dark:text-[#636366]'
           }`}
         >
-          {isUploading ? `导入中 ${uploadPct}%` : doc ? doc.filename : '选择或拖入'}
+          {isUploading ? `导入中 ${uploadPct}%` : doc ? doc.filename : readOnly ? '未导入' : '选择或拖入'}
         </span>
       </div>
 
@@ -174,7 +198,7 @@ const DocSlotCard: React.FC<DocSlotCardProps> = ({
           <span className="text-[10.5px] text-[#8E8E93] tabular-nums">{doc.total_pages}页</span>
         )}
 
-        {!isUploading && displaySamples.length > 0 && (
+        {!readOnly && !isUploading && displaySamples.length > 0 && (
           <div
             ref={sampleRef}
             className="shrink-0"
@@ -239,6 +263,11 @@ export const MasterChatPane: React.FC<MasterChatPaneProps> = ({
   onStartRun,
   onCancelTask,
   onSwitchInspectorTab,
+  readOnly = false,
+  exportedAt,
+  exportingHtml = false,
+  onExportHtml,
+  className,
 }) => {
   const [input, setInput] = useState('');
   const [lotOverrides, setLotOverrides] = useState<Record<string, string>>({});
@@ -250,7 +279,7 @@ export const MasterChatPane: React.FC<MasterChatPaneProps> = ({
 
   const submit = () => {
     const trimmed = input.trim();
-    if (!trimmed || sendingChat) return;
+    if (!trimmed || sendingChat || readOnly) return;
     setInput('');
     onSendMessage(trimmed);
   };
@@ -261,11 +290,16 @@ export const MasterChatPane: React.FC<MasterChatPaneProps> = ({
     project.telemetry.stage === 'assembling_report';
 
   const canConfirmStart =
-    project.checklist.length > 0 && !isRunning && project.stage === 'awaiting_confirm';
-  const canRecheck = project.checklist.length > 0 && !isRunning && project.stage === 'completed';
+    !readOnly && project.checklist.length > 0 && !isRunning && project.stage === 'awaiting_confirm';
+  const canRecheck =
+    !readOnly && project.checklist.length > 0 && !isRunning && project.stage === 'completed';
 
   return (
-    <section className="flex-1 min-w-[320px] bg-white dark:bg-[#1E1E22] border-r border-black/[0.075] dark:border-white/[0.075] flex flex-col h-full">
+    <section
+      className={`bg-white dark:bg-[#1E1E22] border-r border-black/[0.075] dark:border-white/[0.075] flex flex-col h-full ${
+        className || 'flex-1 min-w-[320px]'
+      }`}
+    >
       {/* Dual Document Bar — aligned pixel-for-pixel with InspectorPane 52px header */}
       <div className="relative z-20 h-[52px] px-3.5 bg-[#FAFAFC]/85 dark:bg-[#1B1B1F]/85 backdrop-blur-md border-b border-black/[0.065] dark:border-white/[0.075] flex items-center gap-2.5 shrink-0">
         <DocSlotCard
@@ -277,6 +311,7 @@ export const MasterChatPane: React.FC<MasterChatPaneProps> = ({
           uploadPct={uploadPct}
           onSelectFile={(f) => onUploadFile('tender', f)}
           onSelectSample={(fn) => onMountSample('tender', fn)}
+          readOnly={readOnly}
         />
         <DocSlotCard
           role="response"
@@ -287,6 +322,10 @@ export const MasterChatPane: React.FC<MasterChatPaneProps> = ({
           uploadPct={uploadPct}
           onSelectFile={(f) => onUploadFile('response', f)}
           onSelectSample={(fn) => onMountSample('response', fn)}
+          readOnly={readOnly}
+          onReadOnlyClick={
+            readOnly && project.response_doc ? () => onSwitchInspectorTab('evidence') : undefined
+          }
         />
       </div>
 
@@ -297,7 +336,9 @@ export const MasterChatPane: React.FC<MasterChatPaneProps> = ({
             <div className="w-10 h-10 rounded-[11px] macos-well flex items-center justify-center">
               <Sparkles className="w-4 h-4 text-[#007AFF] dark:text-[#0A84FF]" />
             </div>
-            <span className="text-[12px] tracking-wide">置入招标与响应文件</span>
+            <span className="text-[12px] tracking-wide">
+              {readOnly ? '暂无会话记录' : '置入招标与响应文件'}
+            </span>
           </div>
         ) : (
           <div className="space-y-3.5">
@@ -348,7 +389,7 @@ export const MasterChatPane: React.FC<MasterChatPaneProps> = ({
                                   <button
                                     key={lotStr}
                                     type="button"
-                                    disabled={isRunning}
+                                    disabled={isRunning || readOnly}
                                     onClick={() =>
                                       setLotOverrides((prev) => ({ ...prev, [m.id]: code }))
                                     }
@@ -366,22 +407,24 @@ export const MasterChatPane: React.FC<MasterChatPaneProps> = ({
                             </div>
                           )}
                           <div className="flex items-center gap-2">
-                            <button
-                              disabled={isRunning}
-                              onClick={() => onTriggerPlan(selectedLot || undefined)}
-                              className={`h-[27px] px-3 rounded-[6px] disabled:opacity-45 text-[12px] font-medium flex items-center gap-1.5 transition-all active:scale-[0.98] ${
-                                hasPlan
-                                  ? 'macos-btn-secondary text-[#1D1D1F] dark:text-[#F5F5F7]'
-                                  : 'macos-btn-primary'
-                              }`}
-                            >
-                              {hasPlan ? (
-                                <RotateCcw className="w-3 h-3" />
-                              ) : (
-                                <Sparkles className="w-3 h-3" />
-                              )}
-                              <span>{hasPlan ? '重新规划' : '生成检查计划'}</span>
-                            </button>
+                            {!readOnly && (
+                              <button
+                                disabled={isRunning}
+                                onClick={() => onTriggerPlan(selectedLot || undefined)}
+                                className={`h-[27px] px-3 rounded-[6px] disabled:opacity-45 text-[12px] font-medium flex items-center gap-1.5 transition-all active:scale-[0.98] ${
+                                  hasPlan
+                                    ? 'macos-btn-secondary text-[#1D1D1F] dark:text-[#F5F5F7]'
+                                    : 'macos-btn-primary'
+                                }`}
+                              >
+                                {hasPlan ? (
+                                  <RotateCcw className="w-3 h-3" />
+                                ) : (
+                                  <Sparkles className="w-3 h-3" />
+                                )}
+                                <span>{hasPlan ? '重新规划' : '生成检查计划'}</span>
+                              </button>
+                            )}
                             <button
                               onClick={() => onSwitchInspectorTab('live')}
                               className="h-[27px] px-2.5 rounded-[6px] macos-btn-secondary text-[#1D1D1F] dark:text-[#F5F5F7] text-[12px] font-medium transition-all active:scale-[0.98]"
@@ -396,22 +439,24 @@ export const MasterChatPane: React.FC<MasterChatPaneProps> = ({
                     {/* Inline Plan Action Bar */}
                     {m.msg_type === 'plan_card' && (
                       <div className="mt-2.5 pt-2.5 border-t border-black/[0.07] dark:border-white/[0.08] flex items-center gap-2">
-                        <button
-                          disabled={isRunning}
-                          onClick={() => onStartRun(false)}
-                          className={`h-[27px] px-3 rounded-[6px] disabled:opacity-45 text-[12px] font-medium flex items-center gap-1.5 transition-all active:scale-[0.98] ${
-                            hasReport
-                              ? 'macos-btn-secondary text-[#1D1D1F] dark:text-[#F5F5F7]'
-                              : 'macos-btn-primary'
-                          }`}
-                        >
-                          {hasReport ? (
-                            <RotateCcw className="w-3 h-3" />
-                          ) : (
-                            <Play className="w-3 h-3 fill-current" />
-                          )}
-                          <span>{hasReport ? '重新核查' : '开始核查'}</span>
-                        </button>
+                        {!readOnly && (
+                          <button
+                            disabled={isRunning}
+                            onClick={() => onStartRun(false)}
+                            className={`h-[27px] px-3 rounded-[6px] disabled:opacity-45 text-[12px] font-medium flex items-center gap-1.5 transition-all active:scale-[0.98] ${
+                              hasReport
+                                ? 'macos-btn-secondary text-[#1D1D1F] dark:text-[#F5F5F7]'
+                                : 'macos-btn-primary'
+                            }`}
+                          >
+                            {hasReport ? (
+                              <RotateCcw className="w-3 h-3" />
+                            ) : (
+                              <Play className="w-3 h-3 fill-current" />
+                            )}
+                            <span>{hasReport ? '重新核查' : '开始核查'}</span>
+                          </button>
+                        )}
                         <button
                           onClick={() => onSwitchInspectorTab('live')}
                           className="h-[27px] px-2.5 rounded-[6px] macos-btn-secondary text-[#1D1D1F] dark:text-[#F5F5F7] text-[12px] font-medium transition-all active:scale-[0.98]"
@@ -430,20 +475,40 @@ export const MasterChatPane: React.FC<MasterChatPaneProps> = ({
                         >
                           查看报告
                         </button>
-                        <a
-                          href={`/api/projects/${project.id}/export/docx`}
-                          className="h-[27px] px-2.5 rounded-[6px] macos-btn-secondary text-[#1D1D1F] dark:text-[#F5F5F7] text-[12px] font-medium flex items-center gap-1 transition-all active:scale-[0.98]"
-                        >
-                          <FileText className="w-3 h-3 text-[#007AFF] dark:text-[#409CFF]" />
-                          <span>Word</span>
-                        </a>
-                        <a
-                          href={`/api/projects/${project.id}/export/xlsx`}
-                          className="h-[27px] px-2.5 rounded-[6px] macos-btn-secondary text-[#1D1D1F] dark:text-[#F5F5F7] text-[12px] font-medium flex items-center gap-1 transition-all active:scale-[0.98]"
-                        >
-                          <FileSpreadsheet className="w-3 h-3 text-[#34C759] dark:text-[#30D158]" />
-                          <span>Excel</span>
-                        </a>
+                        {!readOnly ? (
+                          <button
+                            type="button"
+                            disabled={exportingHtml}
+                            onClick={onExportHtml}
+                            className="h-[27px] px-2.5 rounded-[6px] macos-btn-secondary text-[#1D1D1F] dark:text-[#F5F5F7] text-[12px] font-medium flex items-center gap-1.5 transition-all active:scale-[0.98] disabled:opacity-60"
+                          >
+                            {exportingHtml ? (
+                              <Loader2 className="w-3 h-3 animate-spin text-[#007AFF] dark:text-[#0A84FF]" />
+                            ) : (
+                              <Download className="w-3 h-3 text-[#007AFF] dark:text-[#409CFF]" />
+                            )}
+                            <span>{exportingHtml ? '导出中…' : '导出报告'}</span>
+                          </button>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => onSwitchInspectorTab('live')}
+                              className="h-[27px] px-2.5 rounded-[6px] macos-btn-secondary text-[#1D1D1F] dark:text-[#F5F5F7] text-[12px] font-medium transition-all active:scale-[0.98]"
+                            >
+                              查看清单
+                            </button>
+                            {project.response_doc && (
+                              <button
+                                type="button"
+                                onClick={() => onSwitchInspectorTab('evidence')}
+                                className="h-[27px] px-2.5 rounded-[6px] macos-btn-secondary text-[#1D1D1F] dark:text-[#F5F5F7] text-[12px] font-medium transition-all active:scale-[0.98]"
+                              >
+                                浏览原文
+                              </button>
+                            )}
+                          </>
+                        )}
                       </div>
                     )}
                   </div>
@@ -464,80 +529,87 @@ export const MasterChatPane: React.FC<MasterChatPaneProps> = ({
         )}
       </div>
 
-      {/* Bottom Input Composer */}
-      <div className="p-3 border-t border-black/[0.06] dark:border-white/[0.07] bg-[#FAFAFC]/70 dark:bg-[#1B1B1F]/70 backdrop-blur-md">
-        {(isRunning ||
-          canConfirmStart ||
-          canRecheck ||
-          (project.tender_doc &&
-            project.response_doc &&
-            project.checklist.length === 0 &&
-            !isRunning)) && (
-          <div className="flex items-center gap-1.5 mb-2">
-            {isRunning && (
-              <button
-                onClick={onCancelTask}
-                className="px-2.5 py-1 rounded-full bg-[#FF3B30]/10 dark:bg-[#FF453A]/18 hover:bg-[#FF3B30]/18 dark:hover:bg-[#FF453A]/28 text-[#FF3B30] dark:text-[#FF6961] text-[11.5px] font-medium flex items-center gap-1 transition-colors"
-              >
-                <Square className="w-2.5 h-2.5 fill-current" />
-                <span>停止</span>
-              </button>
-            )}
-            {project.tender_doc &&
+      {/* Bottom Input Composer or Read-Only Snapshot Footer */}
+      {readOnly ? (
+        <div className="h-[38px] px-3.5 border-t border-black/[0.06] dark:border-white/[0.07] bg-[#FAFAFC]/70 dark:bg-[#1B1B1F]/70 text-[11px] text-[#8E8E93] flex items-center justify-between tabular-nums shrink-0">
+          <span>标书智检 · 交互式报告</span>
+          {exportedAt && <span>{exportedAt}</span>}
+        </div>
+      ) : (
+        <div className="p-3 border-t border-black/[0.06] dark:border-white/[0.07] bg-[#FAFAFC]/70 dark:bg-[#1B1B1F]/70 backdrop-blur-md">
+          {(isRunning ||
+            canConfirmStart ||
+            canRecheck ||
+            (project.tender_doc &&
               project.response_doc &&
               project.checklist.length === 0 &&
-              !isRunning && (
+              !isRunning)) && (
+            <div className="flex items-center gap-1.5 mb-2">
+              {isRunning && (
                 <button
-                  onClick={() => onTriggerPlan()}
-                  className="px-2.5 py-1 rounded-full bg-[#007AFF]/10 dark:bg-[#0A84FF]/18 hover:bg-[#007AFF]/16 dark:hover:bg-[#0A84FF]/26 text-[#007AFF] dark:text-[#409CFF] text-[11.5px] font-medium transition-colors"
+                  onClick={onCancelTask}
+                  className="px-2.5 py-1 rounded-full bg-[#FF3B30]/10 dark:bg-[#FF453A]/18 hover:bg-[#FF3B30]/18 dark:hover:bg-[#FF453A]/28 text-[#FF3B30] dark:text-[#FF6961] text-[11.5px] font-medium flex items-center gap-1 transition-colors"
                 >
-                  生成清单
+                  <Square className="w-2.5 h-2.5 fill-current" />
+                  <span>停止</span>
                 </button>
               )}
-            {canConfirmStart && (
-              <button
-                onClick={() => onStartRun(false)}
-                className="px-2.5 py-1 rounded-full bg-[#007AFF]/10 dark:bg-[#0A84FF]/18 hover:bg-[#007AFF]/16 dark:hover:bg-[#0A84FF]/26 text-[#007AFF] dark:text-[#409CFF] text-[11.5px] font-medium flex items-center gap-1 transition-colors"
-              >
-                <Play className="w-3 h-3 fill-current" />
-                <span>开始核查</span>
-              </button>
-            )}
-            {canRecheck && (
-              <button
-                onClick={() => onStartRun(true)}
-                className="px-2.5 py-1 rounded-full macos-btn-secondary text-[#1D1D1F] dark:text-[#F5F5F7] text-[11.5px] font-medium flex items-center gap-1 transition-colors"
-              >
-                <RotateCcw className="w-3 h-3" />
-                <span>复检问题项</span>
-              </button>
-            )}
-          </div>
-        )}
+              {project.tender_doc &&
+                project.response_doc &&
+                project.checklist.length === 0 &&
+                !isRunning && (
+                  <button
+                    onClick={() => onTriggerPlan()}
+                    className="px-2.5 py-1 rounded-full bg-[#007AFF]/10 dark:bg-[#0A84FF]/18 hover:bg-[#007AFF]/16 dark:hover:bg-[#0A84FF]/26 text-[#007AFF] dark:text-[#409CFF] text-[11.5px] font-medium transition-colors"
+                  >
+                    生成清单
+                  </button>
+                )}
+              {canConfirmStart && (
+                <button
+                  onClick={() => onStartRun(false)}
+                  className="px-2.5 py-1 rounded-full bg-[#007AFF]/10 dark:bg-[#0A84FF]/18 hover:bg-[#007AFF]/16 dark:hover:bg-[#0A84FF]/26 text-[#007AFF] dark:text-[#409CFF] text-[11.5px] font-medium flex items-center gap-1 transition-colors"
+                >
+                  <Play className="w-3 h-3 fill-current" />
+                  <span>开始核查</span>
+                </button>
+              )}
+              {canRecheck && (
+                <button
+                  onClick={() => onStartRun(true)}
+                  className="px-2.5 py-1 rounded-full macos-btn-secondary text-[#1D1D1F] dark:text-[#F5F5F7] text-[11.5px] font-medium flex items-center gap-1 transition-colors"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>复检问题项</span>
+                </button>
+              )}
+            </div>
+          )}
 
-        <div className="flex items-end gap-2 rounded-[10px] macos-input px-3 py-2">
-          <textarea
-            rows={1}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                submit();
-              }
-            }}
-            placeholder="输入指令…"
-            className="flex-1 bg-transparent resize-none outline-none text-[13px] text-[#1D1D1F] dark:text-[#F5F5F7] placeholder:text-[#8E8E93] dark:placeholder:text-[#636366] max-h-28 leading-5"
-          />
-          <button
-            disabled={!input.trim() || sendingChat}
-            onClick={submit}
-            className="w-6 h-6 rounded-full bg-[#007AFF] dark:bg-[#0A84FF] disabled:bg-black/[0.1] dark:disabled:bg-white/[0.1] text-white disabled:text-white/50 flex items-center justify-center shrink-0 transition-all active:scale-95"
-          >
-            <ArrowUp className="w-3.5 h-3.5 stroke-[2.5]" />
-          </button>
+          <div className="flex items-end gap-2 rounded-[10px] macos-input px-3 py-2">
+            <textarea
+              rows={1}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  submit();
+                }
+              }}
+              placeholder="输入指令…"
+              className="flex-1 bg-transparent resize-none outline-none text-[13px] text-[#1D1D1F] dark:text-[#F5F5F7] placeholder:text-[#8E8E93] dark:placeholder:text-[#636366] max-h-28 leading-5"
+            />
+            <button
+              disabled={!input.trim() || sendingChat}
+              onClick={submit}
+              className="w-6 h-6 rounded-full bg-[#007AFF] dark:bg-[#0A84FF] disabled:bg-black/[0.1] dark:disabled:bg-white/[0.1] text-white disabled:text-white/50 flex items-center justify-center shrink-0 transition-all active:scale-95"
+            >
+              <ArrowUp className="w-3.5 h-3.5 stroke-[2.5]" />
+            </button>
+          </div>
         </div>
-      </div>
+      )}
     </section>
   );
 };

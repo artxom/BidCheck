@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { api } from './api';
+import { getOfflineSnapshot } from './snapshot';
 import { useTheme } from './theme';
 import { TopToolbar } from './components/TopToolbar';
 import { Sidebar } from './components/Sidebar';
@@ -19,26 +20,38 @@ import type {
 } from './types';
 
 export const App: React.FC = () => {
+  const snapshot = getOfflineSnapshot();
+  const isSnapshot = Boolean(snapshot);
   const { themeMode, resolvedTheme, setThemeMode, toggleLightDark } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(() =>
-    typeof window !== 'undefined' ? window.innerWidth >= 980 : true,
+    typeof window !== 'undefined' ? window.innerWidth >= (isSnapshot ? 860 : 980) : true,
+  );
+  const [narrowViewport, setNarrowViewport] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth < 860 : false,
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [toastError, setToastError] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
-  const [activeProject, setActiveProject] = useState<ProjectDetail | null>(null);
+  const [activeProject, setActiveProject] = useState<ProjectDetail | null>(
+    () => snapshot?.project ?? null,
+  );
   const [samples, setSamples] = useState<WorkspaceSample[]>([]);
   const [cacheMb, setCacheMb] = useState(0);
 
-  const [inspectorTab, setInspectorTab] = useState<InspectorTab>('live');
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>(() =>
+    snapshot?.project.report ? 'report' : 'live',
+  );
   const [selectedItem, setSelectedItem] = useState<ChecklistItem | null>(null);
   const [selectedSectionId, setSelectedSectionId] = useState<string | null>(null);
-  const [outline, setOutline] = useState<OutlineSectionLite[]>([]);
-  const [detFindings, setDetFindings] = useState<DeterministicFinding[]>([]);
+  const [outline, setOutline] = useState<OutlineSectionLite[]>(() => snapshot?.outline ?? []);
+  const [detFindings, setDetFindings] = useState<DeterministicFinding[]>(
+    () => snapshot?.deterministic_findings ?? [],
+  );
 
   const [uploadingRole, setUploadingRole] = useState<'tender' | 'response' | null>(null);
   const [uploadPct, setUploadPct] = useState(0);
   const [sendingChat, setSendingChat] = useState(false);
+  const [exportingHtml, setExportingHtml] = useState(false);
 
   const showError = useCallback((msg: string) => {
     setToastError(msg);
@@ -83,26 +96,28 @@ export const App: React.FC = () => {
 
   // Initial bootstrap + macOS shortcuts (Cmd+, Settings, Cmd+\ Sidebar)
   useEffect(() => {
-    (async () => {
-      const [sampleRes, settingsRes] = await Promise.all([
-        api.listWorkspaceSamples(),
-        api.getSettings(),
-      ]);
-      setSamples(sampleRes.samples);
-      setCacheMb(settingsRes.storage.cache_mb);
+    if (!isSnapshot) {
+      (async () => {
+        const [sampleRes, settingsRes] = await Promise.all([
+          api.listWorkspaceSamples(),
+          api.getSettings(),
+        ]);
+        setSamples(sampleRes.samples);
+        setCacheMb(settingsRes.storage.cache_mb);
 
-      const list = await refreshProjectList();
-      if (list.length > 0) {
-        await selectProject(list[0].id);
-      } else {
-        const created = await api.createProject();
-        await refreshProjectList();
-        setActiveProject(created.project);
-      }
-    })();
+        const list = await refreshProjectList();
+        if (list.length > 0) {
+          await selectProject(list[0].id);
+        } else {
+          const created = await api.createProject();
+          await refreshProjectList();
+          setActiveProject(created.project);
+        }
+      })();
+    }
 
     const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === ',') {
+      if (!isSnapshot && (e.metaKey || e.ctrlKey) && e.key === ',') {
         e.preventDefault();
         setSettingsOpen((v) => !v);
       } else if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
@@ -110,13 +125,15 @@ export const App: React.FC = () => {
         setSidebarOpen((v) => !v);
       }
     };
-    let prevWide = window.innerWidth >= 960;
+    const threshold = isSnapshot ? 860 : 960;
+    let prevWide = window.innerWidth >= threshold;
     const onResize = () => {
-      const nowWide = window.innerWidth >= 960;
+      const nowWide = window.innerWidth >= threshold;
       if (prevWide && !nowWide) {
         setSidebarOpen(false);
       }
       prevWide = nowWide;
+      setNarrowViewport(window.innerWidth < 860);
     };
 
     window.addEventListener('keydown', onKeyDown);
@@ -125,12 +142,12 @@ export const App: React.FC = () => {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('resize', onResize);
     };
-  }, [refreshProjectList, selectProject]);
+  }, [isSnapshot, refreshProjectList, selectProject]);
 
   // Real-time SSE connection per active project
   useEffect(() => {
     const projId = activeProject?.id;
-    if (!projId) return;
+    if (isSnapshot || !projId) return;
 
     const es = new EventSource(`/api/projects/${projId}/events`);
 
@@ -207,7 +224,7 @@ export const App: React.FC = () => {
     return () => {
       es.close();
     };
-  }, [activeProject?.id, loadOutline, refreshProjectList]);
+  }, [isSnapshot, activeProject?.id, loadOutline, refreshProjectList]);
 
   const handleCreateProject = async () => {
     const res = await api.createProject();
@@ -351,6 +368,18 @@ export const App: React.FC = () => {
     setCacheMb(res.storage.cache_mb);
   };
 
+  const handleExportHtml = async () => {
+    if (!activeProject || exportingHtml) return;
+    setExportingHtml(true);
+    try {
+      await api.exportReportHtml(activeProject.id, activeProject.name);
+    } catch (err) {
+      showError(err instanceof Error ? err.message : '导出失败');
+    } finally {
+      setExportingHtml(false);
+    }
+  };
+
   const isRunning =
     activeProject?.telemetry.stage === 'inspecting' ||
     activeProject?.telemetry.stage === 'planning' ||
@@ -367,10 +396,13 @@ export const App: React.FC = () => {
         onToggleTheme={toggleLightDark}
         onOpenSettings={() => setSettingsOpen(true)}
         onCancelTask={handleCancelTask}
+        readOnly={isSnapshot}
+        exportingHtml={exportingHtml}
+        onExportHtml={handleExportHtml}
       />
 
       <main className="relative flex-1 flex min-h-0 overflow-hidden">
-        {sidebarOpen && (
+        {!isSnapshot && sidebarOpen && (
           <Sidebar
             projects={projects}
             activeId={activeProject?.id || null}
@@ -388,41 +420,97 @@ export const App: React.FC = () => {
           />
         )}
 
-        {activeProject && (
-          <>
-            <MasterChatPane
-              key={activeProject.id}
-              project={activeProject}
-              samples={samples}
-              uploadingRole={uploadingRole}
-              uploadPct={uploadPct}
-              sendingChat={sendingChat}
-              onUploadFile={handleUploadFile}
-              onMountSample={handleMountSample}
-              onSendMessage={handleSendMessage}
-              onTriggerPlan={handleTriggerPlan}
-              onStartRun={handleStartRun}
-              onCancelTask={handleCancelTask}
-              onSwitchInspectorTab={setInspectorTab}
-            />
+        {activeProject &&
+          (isSnapshot ? (
+            <>
+              {sidebarOpen && narrowViewport && (
+                <div
+                  onClick={() => setSidebarOpen(false)}
+                  className="absolute inset-0 bg-black/25 dark:bg-black/50 z-20"
+                />
+              )}
+              {sidebarOpen && (
+                <MasterChatPane
+                  key={activeProject.id}
+                  project={activeProject}
+                  samples={[]}
+                  uploadingRole={null}
+                  uploadPct={0}
+                  sendingChat={false}
+                  onUploadFile={() => {}}
+                  onMountSample={() => {}}
+                  onSendMessage={() => {}}
+                  onTriggerPlan={() => {}}
+                  onStartRun={() => {}}
+                  onCancelTask={() => {}}
+                  onSwitchInspectorTab={(tab) => {
+                    setInspectorTab(tab);
+                    if (narrowViewport) setSidebarOpen(false);
+                  }}
+                  readOnly
+                  exportedAt={snapshot?.exported_at}
+                  className={
+                    narrowViewport
+                      ? 'absolute inset-y-0 left-0 z-30 w-[min(88vw,420px)] shadow-2xl'
+                      : 'w-[42%] max-w-[560px] min-w-[300px] shrink-0'
+                  }
+                />
+              )}
+              <InspectorPane
+                projectId={activeProject.id}
+                activeTab={inspectorTab}
+                onChangeTab={setInspectorTab}
+                checklist={activeProject.checklist}
+                report={activeProject.report}
+                deterministicFindings={detFindings}
+                outline={outline}
+                isRunning={false}
+                selectedItem={selectedItem}
+                selectedSectionId={selectedSectionId}
+                onToggleItem={() => {}}
+                onInspectEvidence={handleInspectEvidence}
+                onSelectSectionId={setSelectedSectionId}
+                readOnly
+                fullWidth
+              />
+            </>
+          ) : (
+            <>
+              <MasterChatPane
+                key={activeProject.id}
+                project={activeProject}
+                samples={samples}
+                uploadingRole={uploadingRole}
+                uploadPct={uploadPct}
+                sendingChat={sendingChat}
+                onUploadFile={handleUploadFile}
+                onMountSample={handleMountSample}
+                onSendMessage={handleSendMessage}
+                onTriggerPlan={handleTriggerPlan}
+                onStartRun={handleStartRun}
+                onCancelTask={handleCancelTask}
+                onSwitchInspectorTab={setInspectorTab}
+                exportingHtml={exportingHtml}
+                onExportHtml={handleExportHtml}
+              />
 
-            <InspectorPane
-              projectId={activeProject.id}
-              activeTab={inspectorTab}
-              onChangeTab={setInspectorTab}
-              checklist={activeProject.checklist}
-              report={activeProject.report}
-              deterministicFindings={detFindings}
-              outline={outline}
-              isRunning={Boolean(isRunning)}
-              selectedItem={selectedItem}
-              selectedSectionId={selectedSectionId}
-              onToggleItem={handleToggleItem}
-              onInspectEvidence={handleInspectEvidence}
-              onSelectSectionId={setSelectedSectionId}
-            />
-          </>
-        )}
+              <InspectorPane
+                projectId={activeProject.id}
+                activeTab={inspectorTab}
+                onChangeTab={setInspectorTab}
+                checklist={activeProject.checklist}
+                report={activeProject.report}
+                deterministicFindings={detFindings}
+                outline={outline}
+                isRunning={Boolean(isRunning)}
+                selectedItem={selectedItem}
+                selectedSectionId={selectedSectionId}
+                onToggleItem={handleToggleItem}
+                onInspectEvidence={handleInspectEvidence}
+                onSelectSectionId={setSelectedSectionId}
+              />
+            </>
+          ))}
       </main>
 
       {toastError && (
@@ -434,12 +522,14 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      <SettingsModal
-        open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        themeMode={themeMode}
-        onChangeThemeMode={setThemeMode}
-      />
+      {!isSnapshot && (
+        <SettingsModal
+          open={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          themeMode={themeMode}
+          onChangeThemeMode={setThemeMode}
+        />
+      )}
     </div>
   );
 };

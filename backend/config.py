@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+APP_VERSION: str = "0.6.0"
 USD_TO_CNY_RATE: float = 7.25
 
 NON_CHAT_MODEL_RE = re.compile(

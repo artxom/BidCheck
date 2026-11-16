@@ -9,12 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from backend.config import FRONTEND_DIST_DIR, ensure_data_dirs
+from backend.config import APP_VERSION, FRONTEND_DIST_DIR, ensure_data_dirs
 from backend.db import init_db
 from backend.routers import chat_stream, projects, reports, settings
-
-
-APP_VERSION = "0.5.0"
 
 
 @asynccontextmanager

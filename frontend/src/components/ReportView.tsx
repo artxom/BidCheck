@@ -113,7 +113,7 @@ export const ReportView: React.FC<ReportViewProps> = ({
         {report.priority_actions.length > 0 && (
           <div className="pt-2.5 border-t border-black/[0.06] dark:border-white/[0.07] space-y-1">
             <div className="text-[11px] font-semibold text-[#8E8E93]">优先整改</div>
-            {report.priority_actions.slice(0, 4).map((act, idx) => (
+            {report.priority_actions.map((act, idx) => (
               <div
                 key={idx}
                 className="text-[12px] text-[#1D1D1F] dark:text-[#EAEAEF] flex items-start gap-1.5 selectable-text"

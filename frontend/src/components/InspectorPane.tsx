@@ -25,6 +25,8 @@ interface InspectorPaneProps {
   onToggleItem: (itemId: string, enabled: boolean) => void;
   onInspectEvidence: (item: ChecklistItem | null, sectionId?: string) => void;
   onSelectSectionId: (secId: string) => void;
+  readOnly?: boolean;
+  fullWidth?: boolean;
 }
 
 export const InspectorPane: React.FC<InspectorPaneProps> = ({
@@ -41,6 +43,8 @@ export const InspectorPane: React.FC<InspectorPaneProps> = ({
   onToggleItem,
   onInspectEvidence,
   onSelectSectionId,
+  readOnly = false,
+  fullWidth = false,
 }) => {
   const tabs: { key: InspectorTab; label: string; badge?: number }[] = [
     { key: 'live', label: '实况', badge: checklist.length || undefined },
@@ -53,7 +57,13 @@ export const InspectorPane: React.FC<InspectorPaneProps> = ({
   ];
 
   return (
-    <aside className="w-[45%] max-w-[660px] min-w-[320px] bg-[#F6F6F8] dark:bg-[#18181B] flex flex-col h-full">
+    <aside
+      className={
+        fullWidth
+          ? 'flex-1 min-w-0 bg-[#F6F6F8] dark:bg-[#18181B] flex flex-col h-full'
+          : 'w-[45%] max-w-[660px] min-w-[320px] bg-[#F6F6F8] dark:bg-[#18181B] flex flex-col h-full'
+      }
+    >
       {/* macOS Segmented Control Header */}
       <div className="h-[52px] px-3.5 border-b border-black/[0.065] dark:border-white/[0.075] flex items-center justify-center bg-white/60 dark:bg-[#1E1E22]/60 backdrop-blur-md shrink-0">
         <div className="w-full max-w-[300px] macos-segmented p-[2px] rounded-[8px] grid grid-cols-3 gap-0.5">
@@ -92,6 +102,7 @@ export const InspectorPane: React.FC<InspectorPaneProps> = ({
           checklist={checklist}
           deterministicFindings={deterministicFindings}
           isRunning={isRunning}
+          readOnly={readOnly}
           onToggleItem={onToggleItem}
           onInspectEvidence={onInspectEvidence}
         />

@@ -268,3 +268,15 @@ export interface OutlineSectionLite {
   table_count: number;
   image_count: number;
 }
+
+export interface OfflineReportSnapshot {
+  format: 'bidguard-static-report-v1';
+  exported_at: string;
+  app_version: string;
+  project: ProjectDetail;
+  outline: OutlineSectionLite[];
+  deterministic_findings: DeterministicFinding[];
+  sections: Record<string, SectionDetail>;
+  media_map: Record<string, string>;
+  media_blobs: Record<string, string>;
+}

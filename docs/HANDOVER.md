@@ -2,7 +2,7 @@
 
 > **文档定位**：本文件为项目的**权威工程交接基准（Single Source of Truth）**。依据项目维护铁律，**每次阶段性开发或优化执行完毕后，必须通过全部自动化测试、同步更新本交接文档的架构说明与第八章《里程碑交接台账》，并提交同步至 GitHub 远端仓库。**
 
-- **当前版本**：`v0.5.0`
+- **当前版本**：`v0.6.0`
 - **主干分支**：`main`
 - **远端仓库**：`https://github.com/artxom/BidCheck.git`
 - **技术栈**：Python 3.11+ / FastAPI / SQLite (WAL) / lxml / PyMuPDF / AsyncOpenAI + React 19 / TypeScript / Vite 6 / Tailwind CSS v4 + PyInstaller (`--onedir`) & GitHub Actions Windows CI
@@ -45,11 +45,11 @@
 │  │ • docx_parser (lxml) │  │ • master_agent.py    │  │ • AsyncOpenAI 网关 │  │
 │  │ • pdf_parser (fitz)  │  │ • worker_engine.py   │  │ • 四角色独立并发锁 │  │
 │  │ • 6类固有红线扫描器   │  │ • report_agent.py    │  │ • Token/费用台账   │  │
-│  │ • BM25+标题层级检索  │  │ • docx/xlsx 导出器   │  │ • 动态 ETA 估算器  │  │
+│  │ • BM25+标题层级检索  │  │ • html 交互快照导出  │  │ • 动态 ETA 估算器  │  │
 │  └──────────┬───────────┘  └──────────┬───────────┘  └─────────┬──────────┘  │
 │             └─────────────────────────┼────────────────────────┘             │
 │                                       ▼                                      │
-│               SQLite WAL (data/bidguard.db) + AST/JPEG 按需缓存              │
+│            SQLite WAL (data/bidguard.db) + AST/JPEG/WebP 按需缓存            │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -70,8 +70,9 @@
 | `backend/agents/master_agent.py` | 0-Token 上传预检确认（`emit_document_precheck`）、双文档规划拆解、基于真实检索章节字数与角色单价的 `_estimate_plan_metrics` 预估、任务锁与 `/cancel` 取消控制 |
 | `backend/agents/worker_engine.py` | 异步并发逐项核查（含 `asyncio.CancelledError` 安全回退）、确定性致命占位符强制降级硬锁、按需多模态验图 |
 | `backend/agents/report_agent.py` | 全局响应统计、就绪度评分计算、封标风险结论汇编（含无 API 异常时的确定性兜底报告） |
-| `backend/exporters/docx_exporter.py` | 使用 `python-docx` 生成正式排版 Word 核查报告（总体结论、优先整改、固有预警、逐项明细表） |
-| `backend/exporters/xlsx_exporter.py` | 使用 `openpyxl` 生成双 Sheet Excel 整改销项表（问题项自动置顶、状态着色、责任人认领列与自动筛选） |
+| `backend/exporters/html_exporter.py` | 真同源 React + Tailwind v4 单文件交互式静态 HTML 报告导出器：内联编译产物与 `#bidguard-report-snapshot` JSON、`source_key` 去重并发 WebP 转码缓存、路径脱敏与防脚本注入转义 |
+| `backend/exporters/docx_exporter.py` | 使用 `python-docx` 生成正式排版 Word 核查报告（保留接口向后兼容） |
+| `backend/exporters/xlsx_exporter.py` | 使用 `openpyxl` 生成双 Sheet Excel 整改销项表（保留接口向后兼容） |
 | `packaging/` & `scripts/build_windows.ps1` | Windows `.ico` 多尺寸图标生成、`packaging/bidguard.spec`（`--onedir` 捆绑 `frontend/dist` / `docx` / `certifi` / `pymupdf`）与本地一键打 `BidGuard-Windows-x64.zip` |
 | `.github/workflows/release.yml` | GitHub Actions `windows-latest` 流水线：前端编译 → `pytest` 门禁 → PyInstaller 打包 → `BidGuard.exe --self-test` 冒烟 → 自动发布 `BidGuard-Windows-x64.zip` 至 GitHub Release |
 | `backend/routers/*.py` | `projects.py`（8MB 流式上传、样本挂载、章节/图片预览）、`chat_stream.py`（对话、运行、SSE）、`reports.py`（导出）、`settings.py`（配置与连通性测试） |
@@ -83,14 +84,15 @@
 | `frontend/index.html` | 页面骨架与首屏防闪烁（FOUC-free）深浅色模式同步脚本 |
 | `frontend/src/theme.ts` | `useTheme` 状态钩子：管理 `light` / `dark` / `system` 三态、`localStorage` 持久化与系统 `prefers-color-scheme` 实时监听 |
 | `frontend/src/index.css` | Tailwind v4 `@custom-variant dark` 类驱动声明及 macOS 材质样式体系（`.macos-toolbar`、`.macos-sidebar`、`.macos-card`、`.macos-popover`、`.macos-segmented` 等） |
-| `frontend/src/App.tsx` | 全局三栏布局状态编排、每个活跃项目的 `EventSource` 实时事件订阅、全局快捷键（`⌘,`、`⌘\`） |
-| `frontend/src/components/TopToolbar.tsx` | 顶栏：侧栏开关、项目与标段徽章、居中实时遥测胶囊与模型用量/计划预估浮层、导出菜单、深浅色一键切换、设置入口 |
+| `frontend/src/snapshot.ts` | 离线静态 HTML 快照适配器：读取内嵌 `#bidguard-report-snapshot` JSON，提供同步章节详情检索与内嵌 WebP 扫描件解析 |
+| `frontend/src/App.tsx` | 全局布局状态编排（支持工作台三栏在线模式与离线双栏交互报告模式）、`EventSource` 实时事件订阅、全局快捷键（`⌘,`、`⌘\`） |
+| `frontend/src/components/TopToolbar.tsx` | 顶栏：侧栏开关、项目/标段/离线报告徽章、居中实时遥测胶囊与模型用量浮层、一键「导出报告」HTML 下载、深浅色切换、设置入口 |
 | `frontend/src/components/Sidebar.tsx` | 左栏：macOS Source List 风格项目列表、状态指示点、缓存占用展示与一键清理 |
-| `frontend/src/components/MasterChatPane.tsx` | 中栏：双文档拖拽/本地样本挂载槽、Master 极简会话流、内联操作卡片与指令输入栏 |
-| `frontend/src/components/InspectorPane.tsx` | 右栏容器：`实况` / `报告` / `原文` 三段式 macOS 分段控制器 |
-| `frontend/src/components/LiveRunView.tsx` | 实况视图：可折叠形式预警卡片、五大维度分组清单、自定义 macOS 复选框与实时核查状态 |
-| `frontend/src/components/ReportView.tsx` | 报告视图：封标结论与就绪度评分卡、四宫格统计、优先整改项、多维筛选胶囊与整改建议 |
-| `frontend/src/components/EvidenceView.tsx` | 原文视图：条款对照卡、章节快速跳转、原文段落/空单元格高亮表格、扫描件画廊与全屏灯箱（支持 `Esc` 关闭） |
+| `frontend/src/components/MasterChatPane.tsx` | 中栏：双文档槽与 Master 会话流（支持在线指令交互与离线只读快照联跳、`导出报告` 一键导出） |
+| `frontend/src/components/InspectorPane.tsx` | 右栏容器：`实况` / `报告` / `原文` 三段式 macOS 分段控制器（自适应在线分屏与离线全宽布局） |
+| `frontend/src/components/LiveRunView.tsx` | 实况视图：可折叠形式预警卡片、五大维度分组清单、自定义 macOS 复选框（只读快照态自动锁定）与实时核查状态 |
+| `frontend/src/components/ReportView.tsx` | 报告视图：封标结论与就绪度评分卡、四宫格统计、完整优先整改项、多维筛选胶囊与整改建议 |
+| `frontend/src/components/EvidenceView.tsx` | 原文视图：条款对照卡（含视觉核验与整改建议）、章节快速跳转、原文段落、支持展开 `>35` 行长表格、扫描件画廊与全屏灯箱（支持 `Esc` 关闭） |
 | `frontend/src/components/SettingsModal.tsx` | 设置面板：供应商密钥、`/models` API 实时模型列表拉取与可搜索选择器、四角色模型/并发/自动单价联动、底部外观三态切换器 |
 
 ---
@@ -106,8 +108,8 @@
   - `token_ledger`：每次大模型调用的输入/输出 Token、耗时与成本流水表
 - `data/uploads/`：流式接收的上传标书文件副本
 - `data/ast_cache/`：解析后的 `DocumentAST` JSON 缓存（避免重复解析百兆文件）
-- `data/media_cache/`：按需提取并压缩后的扫描件 `.jpg` 缓存（支持在侧栏底部一键清理）
-- `data/reports/`：导出的 `.docx` 与 `.xlsx` 临时报告文件
+- `data/media_cache/`：按需提取并压缩后的扫描件 `.jpg` 及 HTML 快照 `.webp` 缓存（支持在侧栏底部一键清理）
+- `data/reports/`：导出的交互式静态 `.html` 报告（以及兼容接口 `.docx` / `.xlsx` 临时文件）
 
 ### 3.2 项目状态机（`stage`）
 `idle`（就绪 / 待导入 / 待生成清单 / 已停止） → `parsing`（解析文档中） → `planning`（Master 拆解规划中，实时计时） → `awaiting_confirm`（待确认执行 / 待复检） → `inspecting`（并发核查中） → `assembling_report`（汇总报告中） → `completed`（已完成） / `error`（异常）。
@@ -130,7 +132,8 @@
 | `GET` | `/api/projects/{id}/outline` | 获取响应文件目录大纲与固有红线扫描列表 |
 | `GET` | `/api/projects/{id}/sections/{sec_id}` | 获取指定章节原文段落、表格与图片 ID |
 | `GET` | `/api/projects/{id}/media/{media_id}` | 按需转码并返回章节内嵌扫描件 JPEG |
-| `GET` | `/api/projects/{id}/export/docx` \| `/xlsx` | 导出 Word 核查报告 / Excel 整改销项表 |
+| `GET` | `/api/projects/{id}/export/html` | 导出真同源单文件交互式静态 HTML 报告（内嵌前端产物、全书章节表格与 WebP 扫描件） |
+| `GET` | `/api/projects/{id}/export/docx` \| `/xlsx` | 导出 Word 核查报告 / Excel 整改销项表（向后兼容接口） |
 | `GET / PUT` | `/api/settings` | 读取 / 保存供应商密钥与四角色路由配置 |
 | `POST` | `/api/settings/models` | 调用供应商 OpenAI 兼容 `/models` 接口动态拉取可用模型清单、视觉能力标识与参考单价 |
 | `POST` | `/api/settings/test` \| `/clear-cache` | 测试模型连通性 / 清理图片与导出缓存 |
@@ -183,7 +186,7 @@ cd frontend && npm run dev
 
 招投标文档通常包含商业机密、报价明细、身份证件、财务审计数据及客户合同，本地数据库亦包含大模型 API Key。提交 Git 前必须严格遵守：
 
-1. **禁止入库文件类型**：`*.docx`、`*.doc`、`*.pdf`、`*.xlsx`、`~$*`、`data/`、`.env`、`.env.*`（`.env.example` 除外）、`frontend/dist/`、`frontend/node_modules/`。
+1. **禁止入库文件类型**：`*.docx`、`*.doc`、`*.pdf`、`*.xlsx`、`*检查报告.html`、`*核查报告.html`、`~$*`、`data/`、`.env`、`.env.*`（`.env.example` 除外）、`frontend/dist/`、`frontend/node_modules/`。
 2. **提交前强制安全自检命令**：
    ```bash
    git status
@@ -248,6 +251,26 @@ git log --oneline -n 5
 ---
 
 ## 八、里程碑交接台账（Milestone Handover Log）
+
+### Milestone 6 — `v0.6.0`（2026-11-16）
+- **阶段目标**：将报告导出升级为与工作台像素级同源的**单文件静态交互式 HTML 报告**，使报告审阅者双击 `.html` 文件即可在浏览器离线完整交互查看报告结论、实况清单、全部章节原文、长表格及扫描件大图。
+- **核心变更内容**：
+  1. **真同源 React + Tailwind v4 静态快照架构（`frontend/vite.config.ts` / `frontend/src/snapshot.ts` / `frontend/src/api.ts` / `frontend/src/App.tsx`）**：配置 Vite 单 CSS/单 JS 打包（`cssCodeSplit: false`、`inlineDynamicImports: true`）；新增 `OfflineReportSnapshot` 契约与 `snapshot.ts` 离线适配器，离线打开 HTML 时自动读取内嵌 `#bidguard-report-snapshot` JSON，零网络请求与零 SSE 连接同步渲染只读交互态工作台。
+  2. **全链路交互升级与导出入口收敛（`TopToolbar.tsx` / `MasterChatPane.tsx` / `InspectorPane.tsx` / `LiveRunView.tsx` / `ReportView.tsx` / `EvidenceView.tsx`）**：将工作台顶栏与会话报告卡的 Word/Excel 按钮统一收敛为一键 **`导出报告`** 按钮（`Blob` 下载含加载态）；离线报告保留 Activity Capsule 用量浮层、浅色/深色切换、`⌘\` 面板折叠（`< 860px` 抽屉化）、`实况`/`报告`/`原文` 三段联动；`ReportView` 完整展示全部 `priority_actions`，`EvidenceView` 补充展示 `vision_note` 与 `remediation` 并支持 `>35` 行长表格一键展开/收起及全屏灯箱 `Esc` 关闭。
+  3. **单文件 HTML 导出引擎与并发 WebP 压缩（`backend/exporters/html_exporter.py` / `backend/routers/reports.py`）**：新增 `GET /api/projects/{id}/export/html`；按 `source_key` 去重读取响应文件全量内嵌图片（支持 `.docx`/`.pdf` 与已缓存 `.jpg` 兜底），通过 `ThreadPoolExecutor` 并发合成白底并压缩为 `max_side=1000` WebP 缓存于 `MEDIA_CACHE_DIR`；剔除 `source_path` 本地绝对路径并对 JSON/CSS/JS 做防注入转义（保留 `/export/docx` 与 `/export/xlsx` 路由向后兼容）。
+  4. **涉密防误提交与版本号更新（`.gitignore` / `backend/config.py` / `backend/main.py`）**：将 `*检查报告.html` 与 `*核查报告.html` 纳入 `.gitignore`，升级 `APP_VERSION` 至 `0.6.0`。
+- **涉及主要文件**：
+  - 新增：`backend/exporters/html_exporter.py`、`frontend/src/snapshot.ts`
+  - 修改：`backend/config.py`、`backend/main.py`、`backend/routers/reports.py`、`frontend/vite.config.ts`、`frontend/src/types.ts`、`frontend/src/api.ts`、`frontend/src/App.tsx`、`frontend/src/components/TopToolbar.tsx`、`frontend/src/components/MasterChatPane.tsx`、`frontend/src/components/InspectorPane.tsx`、`frontend/src/components/LiveRunView.tsx`、`frontend/src/components/ReportView.tsx`、`frontend/src/components/EvidenceView.tsx`、`.gitignore`、`tests/test_ui_and_handover.py`、`tests/test_engine.py`、`README.md`、`docs/HANDOVER.md`
+- **验证记录**：
+  - `(cd frontend && npm run build)` 类型检查与单文件资产打包零报错通过（CSS `57.24 kB` / JS `323.84 kB`）
+  - `.venv/bin/pytest -v` 11 项全量自动化测试通过（含合成 `.docx` XSS 转义、`source_path` 脱敏、45 行表格、RGBA->WebP 转码及真实样本全链路 HTML 导出测试）
+  - 真实 636 页 / 488 图样本（`proj_167124d0da`）冷导出耗时 `2.49s`、缓存复用 `0.11s`，产出单文件 `22.87 MB`
+  - Headless Microsoft Edge CDP 实测 `file://` 离线运行及 `1440×900` / `1024×768` / `390×844` 三视口零横向溢出、0 JS 异常、0 网络外联、图片全加载、572 行表格展开与灯箱 `Esc` 关闭全部通过；重启本地 `127.0.0.1:8000` 验证在线界面一键导出 `200 OK`
+- **已知边界与下一阶段建议**：
+  - 静态 HTML 报告内嵌全书文本与 WebP 压缩图，600+ 页标书导出包约 `20–25 MB`，支持任意现代浏览器离线秒开；`/export/docx` 与 `/export/xlsx` 后端接口继续保留以供脚本或兼容调用。
+
+---
 
 ### Milestone 5 — `v0.5.0`（2026-11-16）
 - **阶段目标**：补齐独立免 Python 的 Windows 桌面可执行打包能力、建立 GitHub Actions 自动发版 Release 流水线（产出 `BidGuard-Windows-x64.zip`），并完成 GitHub 远端库（`artxom/BidCheck`）起始版本上传。

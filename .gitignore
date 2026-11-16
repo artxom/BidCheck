@@ -3,6 +3,8 @@
 *.doc
 *.pdf
 *.xlsx
+*检查报告.html
+*核查报告.html
 ~$*
 
 # Runtime storage, SQLite DB & extracted media caches

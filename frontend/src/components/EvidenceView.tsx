@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Loader2, Image as ImageIcon, X, FileSearch } from 'lucide-react';
 import { api } from '../api';
+import { getSnapshotSection, isOfflineSnapshotMode } from '../snapshot';
 import type { ChecklistItem, OutlineSectionLite, SectionDetail } from '../types';
 
 interface EvidenceViewProps {
@@ -21,6 +22,7 @@ export const EvidenceView: React.FC<EvidenceViewProps> = ({
   const [section, setSection] = useState<SectionDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [lightboxMediaId, setLightboxMediaId] = useState<string | null>(null);
+  const [expandedTables, setExpandedTables] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (!lightboxMediaId) return;
@@ -32,6 +34,7 @@ export const EvidenceView: React.FC<EvidenceViewProps> = ({
   }, [lightboxMediaId]);
 
   useEffect(() => {
+    setExpandedTables({});
     const targetId =
       selectedSectionId ||
       selectedItem?.matched_sections[0]?.section_id ||
@@ -39,6 +42,12 @@ export const EvidenceView: React.FC<EvidenceViewProps> = ({
       null;
     if (!targetId) {
       setSection(null);
+      return;
+    }
+
+    if (isOfflineSnapshotMode()) {
+      setSection(getSnapshotSection(targetId));
+      setLoading(false);
       return;
     }
 
@@ -90,6 +99,18 @@ export const EvidenceView: React.FC<EvidenceViewProps> = ({
           {selectedItem.conclusion && (
             <div className="text-[11.5px] font-medium text-[#007AFF] dark:text-[#409CFF] pt-1.5 border-t border-black/[0.05] dark:border-white/[0.06]">
               {selectedItem.conclusion}
+            </div>
+          )}
+
+          {selectedItem.vision_note && (
+            <div className="text-[11px] text-[#515154] dark:text-[#AEAEB2]">
+              {selectedItem.vision_note}
+            </div>
+          )}
+
+          {selectedItem.remediation && selectedItem.compliance_status !== 'passed' && (
+            <div className="text-[11.5px] text-[#B45309] dark:text-[#FFB340] bg-[#FF9500]/[0.08] dark:bg-[#FF9F0A]/[0.12] border border-[#FF9500]/15 dark:border-[#FF9F0A]/20 px-2.5 py-1.5 rounded-[6px]">
+              {selectedItem.remediation}
             </div>
           )}
 
@@ -173,40 +194,61 @@ export const EvidenceView: React.FC<EvidenceViewProps> = ({
           )}
 
           {/* Tables */}
-          {section.tables.map((tbl) => (
-            <div
-              key={tbl.table_id}
-              className="overflow-x-auto border border-black/[0.08] dark:border-white/[0.09] rounded-[7px]"
-            >
-              <table className="w-full text-[11.5px] border-collapse">
-                <tbody>
-                  {tbl.rows.slice(0, 35).map((row, rIdx) => (
-                    <tr
-                      key={rIdx}
-                      className={
-                        rIdx === 0
-                          ? 'bg-black/[0.035] dark:bg-white/[0.055] font-semibold text-[#1D1D1F] dark:text-[#F5F5F7]'
-                          : 'border-t border-black/[0.06] dark:border-white/[0.07] text-[#2C2C2E] dark:text-[#D1D1D6]'
-                      }
-                    >
-                      {row.map((cell, cIdx) => (
-                        <td
-                          key={cIdx}
-                          className="px-2 py-1.5 border-r last:border-r-0 border-black/[0.05] dark:border-white/[0.06] align-top"
-                        >
-                          {cell || (
-                            <span className="text-[#FF3B30]/70 dark:text-[#FF6961]/80 italic">
-                              空
-                            </span>
-                          )}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ))}
+          {section.tables.map((tbl) => {
+            const isExpanded = Boolean(expandedTables[tbl.table_id]);
+            const hasMoreRows = tbl.rows.length > 35;
+            const visibleRows = isExpanded ? tbl.rows : tbl.rows.slice(0, 35);
+            return (
+              <div
+                key={tbl.table_id}
+                className="overflow-x-auto border border-black/[0.08] dark:border-white/[0.09] rounded-[7px]"
+              >
+                <table className="w-full text-[11.5px] border-collapse">
+                  <tbody>
+                    {visibleRows.map((row, rIdx) => (
+                      <tr
+                        key={rIdx}
+                        className={
+                          rIdx === 0
+                            ? 'bg-black/[0.035] dark:bg-white/[0.055] font-semibold text-[#1D1D1F] dark:text-[#F5F5F7]'
+                            : 'border-t border-black/[0.06] dark:border-white/[0.07] text-[#2C2C2E] dark:text-[#D1D1D6]'
+                        }
+                      >
+                        {row.map((cell, cIdx) => (
+                          <td
+                            key={cIdx}
+                            className="px-2 py-1.5 border-r last:border-r-0 border-black/[0.05] dark:border-white/[0.06] align-top"
+                          >
+                            {cell || (
+                              <span className="text-[#FF3B30]/70 dark:text-[#FF6961]/80 italic">
+                                空
+                              </span>
+                            )}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {hasMoreRows && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setExpandedTables((prev) => ({
+                        ...prev,
+                        [tbl.table_id]: !isExpanded,
+                      }))
+                    }
+                    className="w-full py-1.5 px-2.5 text-[11px] font-medium text-[#007AFF] dark:text-[#409CFF] bg-black/[0.025] dark:bg-white/[0.03] hover:bg-black/[0.045] dark:hover:bg-white/[0.06] border-t border-black/[0.06] dark:border-white/[0.07] text-center transition-colors"
+                  >
+                    {isExpanded
+                      ? '收起表格'
+                      : `展开其余 ${tbl.rows.length - 35} 行（共 ${tbl.rows.length} 行）`}
+                  </button>
+                )}
+              </div>
+            );
+          })}
 
           {/* Embedded Scanned Images Gallery */}
           {section.media_ids.length > 0 && (
@@ -224,7 +266,7 @@ export const EvidenceView: React.FC<EvidenceViewProps> = ({
                   >
                     <div className="rounded-[5px] overflow-hidden bg-white">
                       <img
-                        src={`/api/projects/${projectId}/media/${mid}`}
+                        src={api.getMediaUrl(projectId, mid)}
                         alt={mid}
                         loading="lazy"
                         className="w-full h-36 object-contain group-hover:scale-[1.02] transition-transform"
@@ -260,7 +302,7 @@ export const EvidenceView: React.FC<EvidenceViewProps> = ({
             <X className="w-4 h-4" />
           </button>
           <img
-            src={`/api/projects/${projectId}/media/${lightboxMediaId}`}
+            src={api.getMediaUrl(projectId, lightboxMediaId)}
             alt={lightboxMediaId}
             onClick={(e) => e.stopPropagation()}
             className="max-w-full max-h-full rounded-[10px] shadow-2xl bg-white"

@@ -1,3 +1,9 @@
+import {
+  getOfflineSnapshot,
+  getSnapshotMediaUrl,
+  getSnapshotSection,
+  isOfflineSnapshotMode,
+} from './snapshot';
 import type {
   AppSettings,
   ChecklistItem,
@@ -122,13 +128,74 @@ export const api = {
       body: JSON.stringify({ enabled }),
     }),
 
-  getOutline: (projectId: string) =>
-    requestJson<{ sections: OutlineSectionLite[]; deterministic_findings: DeterministicFinding[] }>(
+  getOutline: (projectId: string) => {
+    const snap = getOfflineSnapshot();
+    if (snap) {
+      return Promise.resolve({
+        sections: snap.outline,
+        deterministic_findings: snap.deterministic_findings,
+      });
+    }
+    return requestJson<{ sections: OutlineSectionLite[]; deterministic_findings: DeterministicFinding[] }>(
       `/api/projects/${projectId}/outline`,
-    ),
+    );
+  },
 
-  getSection: (projectId: string, sectionId: string) =>
-    requestJson<{ section: SectionDetail }>(`/api/projects/${projectId}/sections/${sectionId}`),
+  getSection: (projectId: string, sectionId: string) => {
+    if (isOfflineSnapshotMode()) {
+      const section = getSnapshotSection(sectionId);
+      if (section) {
+        return Promise.resolve({ section });
+      }
+      return Promise.reject(new Error('章节不存在'));
+    }
+    return requestJson<{ section: SectionDetail }>(`/api/projects/${projectId}/sections/${sectionId}`);
+  },
+
+  getMediaUrl: (projectId: string, mediaId: string): string => {
+    if (isOfflineSnapshotMode()) {
+      return getSnapshotMediaUrl(mediaId);
+    }
+    return `/api/projects/${projectId}/media/${mediaId}`;
+  },
+
+  exportReportHtml: async (projectId: string, projectName: string): Promise<void> => {
+    const res = await fetch(`/api/projects/${projectId}/export/html`);
+    if (!res.ok) {
+      let detail = `导出失败 (HTTP ${res.status})`;
+      try {
+        const errBody = await res.json();
+        if (errBody?.detail) detail = String(errBody.detail);
+      } catch {
+        // ignore
+      }
+      throw new Error(detail);
+    }
+    let filename = `${projectName || '标书智检'}_标书检查报告.html`;
+    const disp = res.headers.get('Content-Disposition') || '';
+    const utf8Match = disp.match(/filename\*=UTF-8''([^;]+)/i);
+    if (utf8Match?.[1]) {
+      try {
+        filename = decodeURIComponent(utf8Match[1].trim());
+      } catch {
+        // ignore malformed filename encoding
+      }
+    } else {
+      const plainMatch = disp.match(/filename="?([^";]+)"?/i);
+      if (plainMatch?.[1]) {
+        filename = plainMatch[1].trim();
+      }
+    }
+    const blob = await res.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+  },
 
   getSettings: () =>
     requestJson<{

@@ -53,7 +53,7 @@ def test_frontend_bundle_dark_mode_and_restrained_copy() -> None:
     js_text = js_files[0].read_text(encoding="utf-8")
 
     # Verify concise macOS labels and safe settings cancel action are present
-    for concise in ("置入招标与响应文件", "实况", "报告", "原文", "形式预警", "浅色", "深色", "自动", "取消"):
+    for concise in ("置入招标与响应文件", "实况", "报告", "原文", "形式预警", "浅色", "深色", "自动", "取消", "导出报告"):
         assert concise in js_text
 
     # Verify verbose headache-inducing prompts and browser alert() were removed
@@ -69,7 +69,7 @@ def test_frontend_bundle_dark_mode_and_restrained_copy() -> None:
 
 def test_handover_docs_and_gitignore_guardrails() -> None:
     gitignore = (BASE_DIR / ".gitignore").read_text(encoding="utf-8")
-    for pattern in ("*.docx", "*.pdf", "*.xlsx", "data/", ".env", "frontend/dist/", "*.tsbuildinfo", "release/", "BidGuard-*.zip"):
+    for pattern in ("*.docx", "*.pdf", "*.xlsx", "*检查报告.html", "*核查报告.html", "data/", ".env", "frontend/dist/", "*.tsbuildinfo", "release/", "BidGuard-*.zip"):
         assert pattern in gitignore
 
     agents_md = BASE_DIR / "AGENTS.md"
@@ -88,9 +88,11 @@ def test_handover_docs_and_gitignore_guardrails() -> None:
         "v0.3.0",
         "v0.4.0",
         "v0.5.0",
+        "v0.6.0",
         "BidGuard-Windows-x64.zip",
         "/api/settings/models",
         "/cancel",
+        "/export/html",
     ):
         assert required_section in handover_text
 
@@ -121,9 +123,11 @@ async def test_api_edge_cases_and_spa_security() -> None:
         r_plan_404 = await client.post("/api/projects/proj_nonexistent/plan", json={})
         assert r_plan_404.status_code == 404
 
-        # 4. Starting run before checklist exists rejected cleanly (400)
+        # 4. Starting run or exporting report before data exists rejected cleanly (400)
         r_run_early = await client.post(f"/api/projects/{pid}/run", json={"recheck_only": False})
         assert r_run_early.status_code == 400
+        r_html_early = await client.get(f"/api/projects/{pid}/export/html")
+        assert r_html_early.status_code == 400
 
         # 5. Non-existent project GET returns 404
         r_404 = await client.get("/api/projects/proj_nonexistent")
@@ -852,4 +856,161 @@ def test_windows_packaging_frozen_paths_and_launcher_selftest(tmp_path) -> None:
     for expected in ("windows-latest", "BidGuard-Windows-x64.zip", "softprops/action-gh-release"):
         assert expected in wf_text
     assert "--self-test" in ps_script.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_standalone_html_report_export_and_sanitization(tmp_path) -> None:
+    import base64
+    import io
+    import json
+    import re
+    import docx
+    from PIL import Image
+
+    from backend.db import update_project_fields
+    from backend.parsers.indexer import parse_and_cache_document
+    from backend.schemas import CategoryStat, DocumentSummary, InspectionReport, MatchedSectionRef
+
+    init_db()
+
+    # Build synthetic .docx with XSS-like script string, 45-row table with empty cell, and RGBA PNG
+    img_path = tmp_path / "badge_rgba.png"
+    Image.new("RGBA", (120, 80), (15, 110, 230, 180)).save(img_path, format="PNG")
+
+    synth_docx = tmp_path / "html_export_response.docx"
+    doc = docx.Document()
+    doc.add_heading("第一章 资格审查要求", level=1)
+    doc.add_paragraph("测试正文包含特殊字符 </script><script>alert(1)</script> & 响应完整。")
+    doc.add_picture(str(img_path))
+    tbl = doc.add_table(rows=45, cols=2)
+    tbl.cell(0, 0).text = "序号"
+    tbl.cell(0, 1).text = "要求响应"
+    for r in range(1, 45):
+        tbl.cell(r, 0).text = f"R{r:02d}"
+        tbl.cell(r, 1).text = "" if r == 2 else f"已响应条款 {r}"
+    doc.save(synth_docx)
+
+    ast = parse_and_cache_document(synth_docx, "response", "ut_html_resp", force_reparse=True)
+    assert len(ast.sections) >= 1
+    target_sec = next(s for s in ast.sections if s.tables)
+
+    proj = create_project("HTML快照导出测试")
+    tender_summary = DocumentSummary(
+        doc_id="ut_html_tender",
+        filename="tender.docx",
+        file_type="docx",
+        doc_role="tender",
+        file_size_bytes=1024,
+        total_pages=10,
+        total_chars=500,
+        total_tables=1,
+        total_images=0,
+        metadata={"source_path": "/secret/local/path/tender.docx"},
+    )
+    resp_summary = DocumentSummary(
+        doc_id=ast.doc_id,
+        filename=ast.filename,
+        file_type=ast.file_type,
+        doc_role="response",
+        file_size_bytes=ast.file_size_bytes,
+        total_pages=ast.total_pages,
+        total_chars=ast.total_chars,
+        total_tables=ast.total_tables,
+        total_images=ast.total_images,
+        metadata={"source_path": ast.source_path},
+        deterministic_count=len(ast.deterministic_findings),
+    )
+    item = ChecklistItem(
+        item_id="CHK-HTML-1",
+        order_index=0,
+        category="qualification",
+        title="资格与扫描件核验",
+        requirement_text="提供营业执照扫描件与响应表",
+        risk_level="fatal",
+        requires_vision=True,
+        run_status="completed",
+        compliance_status="partial",
+        matched_sections=[
+            MatchedSectionRef(
+                section_id=target_sec.section_id,
+                breadcrumb=target_sec.breadcrumb,
+                page_label=target_sec.page_label,
+            )
+        ],
+        media_ids=list(target_sec.media_ids),
+        vision_verified=True,
+        vision_note="已核验扫描图。",
+        conclusion="表格第2行留空。",
+        remediation="补齐表格第2行内容。",
+    )
+    save_checklist(proj.id, [item])
+    rep = InspectionReport(
+        generated_at="2026-11-16T23:00:00",
+        project_name=proj.name,
+        target_lot="C",
+        overall_verdict="high_risk",
+        verdict_label="存在废标红线缺项，暂不可封标",
+        readiness_score=72,
+        executive_summary="存在1处表格留空。",
+        key_risks=["表格第2行留空"],
+        priority_actions=["补齐第2行", "核对证照", "复核页码", "确认盖章", "最终封标检查"],
+        total_items=1,
+        passed_count=0,
+        partial_count=1,
+        missing_count=0,
+        fatal_issue_count=1,
+        category_stats=[CategoryStat(category="qualification", label="资格审查", total=1, partial=1)],
+        deterministic_findings=ast.deterministic_findings,
+    )
+    update_project_fields(
+        proj.id,
+        target_lot="C",
+        stage="completed",
+        tender_doc_json=tender_summary.model_dump_json(),
+        response_doc_json=resp_summary.model_dump_json(),
+        report_json=rep.model_dump_json(),
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        r_html = await client.get(f"/api/projects/{proj.id}/export/html")
+        assert r_html.status_code == 200
+        assert "text/html" in r_html.headers.get("content-type", "")
+        disp = r_html.headers.get("content-disposition", "")
+        assert "UTF-8''" in disp and ".html" in disp
+
+        html_text = r_html.text
+        assert ".macos-toolbar" in html_text
+        assert ":where(.dark" in html_text
+        assert "bidguard-theme" in html_text
+
+        m = re.search(
+            r'<script id="bidguard-report-snapshot" type="application/json">(.*?)</script>',
+            html_text,
+            re.DOTALL,
+        )
+        assert m is not None, "Snapshot JSON script tag missing"
+        snap_raw = m.group(1)
+        assert "<" not in snap_raw and ">" not in snap_raw
+
+        snap = json.loads(snap_raw)
+        assert snap["format"] == "bidguard-static-report-v1"
+        assert snap["app_version"] == "0.6.0"
+        assert "source_path" not in snap["project"]["tender_doc"]["metadata"]
+        assert "source_path" not in snap["project"]["response_doc"]["metadata"]
+        assert len(snap["outline"]) >= 1
+        assert len(snap["project"]["report"]["priority_actions"]) == 5
+
+        sec_snap = snap["sections"][target_sec.section_id]
+        assert len(sec_snap["tables"][0]["rows"]) == 45
+        assert "</script><script>alert(1)</script>" in " ".join(sec_snap["paragraphs"])
+
+        assert len(snap["media_map"]) >= 1
+        assert len(snap["media_blobs"]) >= 1
+        for data_uri in snap["media_blobs"].values():
+            assert data_uri.startswith("data:image/webp;base64,")
+            raw_webp = base64.b64decode(data_uri.split(",", 1)[1])
+            with Image.open(io.BytesIO(raw_webp)) as im_out:
+                assert im_out.format == "WEBP"
+
 

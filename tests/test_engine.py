@@ -212,3 +212,12 @@ async def test_full_api_and_multi_agent_pipeline_with_exports() -> None:
                 assert "word/document.xml" in z1.namelist()
             with zipfile.ZipFile(io.BytesIO(r_xlsx.content)) as z2:
                 assert "xl/workbook.xml" in z2.namelist()
+
+            # Verify standalone interactive HTML report export
+            r_html = await client.get(f"/api/projects/{proj_id}/export/html")
+            assert r_html.status_code == 200
+            assert "text/html" in r_html.headers.get("content-type", "")
+            html_body = r_html.text
+            assert "bidguard-report-snapshot" in html_body
+            assert "data:image/webp;base64," in html_body
+            assert len(html_body) > 100_000
