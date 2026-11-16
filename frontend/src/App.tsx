@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { api } from './api';
+import { useTheme } from './theme';
 import { TopToolbar } from './components/TopToolbar';
 import { Sidebar } from './components/Sidebar';
 import { MasterChatPane } from './components/MasterChatPane';
@@ -18,6 +19,7 @@ import type {
 } from './types';
 
 export const App: React.FC = () => {
+  const { themeMode, resolvedTheme, setThemeMode, toggleLightDark } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
@@ -69,11 +71,10 @@ export const App: React.FC = () => {
     [loadOutline],
   );
 
-  // Initial bootstrap + Cmd+, keyboard shortcut for Settings
+  // Initial bootstrap + macOS shortcuts (Cmd+, Settings, Cmd+\ Sidebar)
   useEffect(() => {
     (async () => {
-      const [, sampleRes, settingsRes] = await Promise.all([
-        Promise.resolve(),
+      const [sampleRes, settingsRes] = await Promise.all([
         api.listWorkspaceSamples(),
         api.getSettings(),
       ]);
@@ -94,6 +95,9 @@ export const App: React.FC = () => {
       if ((e.metaKey || e.ctrlKey) && e.key === ',') {
         e.preventDefault();
         setSettingsOpen((v) => !v);
+      } else if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
+        e.preventDefault();
+        setSidebarOpen((v) => !v);
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -216,7 +220,7 @@ export const App: React.FC = () => {
       const sRes = await api.getSettings();
       setCacheMb(sRes.storage.cache_mb);
     } catch (err) {
-      alert(err instanceof Error ? err.message : '文档导入失败');
+      alert(err instanceof Error ? err.message : '导入失败');
     } finally {
       setUploadingRole(null);
       setUploadPct(0);
@@ -258,7 +262,7 @@ export const App: React.FC = () => {
     try {
       await api.startRun(activeProject.id, recheckOnly);
     } catch (err) {
-      alert(err instanceof Error ? err.message : '启动检查失败');
+      alert(err instanceof Error ? err.message : '启动失败');
     }
   };
 
@@ -284,12 +288,14 @@ export const App: React.FC = () => {
     activeProject?.telemetry.stage === 'assembling_report';
 
   return (
-    <div className="w-screen h-screen flex flex-col bg-[#F5F5F7] overflow-hidden">
+    <div className="w-screen h-screen flex flex-col bg-[#F4F4F6] dark:bg-[#161618] text-[#1D1D1F] dark:text-[#F5F5F7] overflow-hidden transition-colors duration-150">
       <TopToolbar
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
         project={activeProject}
         telemetry={activeProject?.telemetry || null}
+        resolvedTheme={resolvedTheme}
+        onToggleTheme={toggleLightDark}
         onOpenSettings={() => setSettingsOpen(true)}
       />
 
@@ -340,7 +346,12 @@ export const App: React.FC = () => {
         )}
       </main>
 
-      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        themeMode={themeMode}
+        onChangeThemeMode={setThemeMode}
+      />
     </div>
   );
 };

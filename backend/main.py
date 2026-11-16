@@ -22,8 +22,8 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(
-    title="BidGuard 标书自动检查工作台",
-    version="0.1.0",
+    title="BidGuard 标书智检",
+    version="0.2.0",
     lifespan=lifespan,
 )
 

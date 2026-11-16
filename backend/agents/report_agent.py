@@ -56,7 +56,7 @@ async def assemble_final_report(project_id: str, response_ast: DocumentAST) -> I
     await EVENT_BUS.sync_and_broadcast_telemetry(
         project_id,
         stage="assembling_report",
-        stage_label="正在组装核查报告…",
+        stage_label="汇总中",
         completed_items=total,
         total_items=total,
     )
@@ -162,16 +162,15 @@ async def assemble_final_report(project_id: str, response_ast: DocumentAST) -> I
     await EVENT_BUS.sync_and_broadcast_telemetry(
         project_id,
         stage="completed",
-        stage_label="检查完成",
+        stage_label="已完成",
         completed_items=total,
         total_items=total,
     )
     await EVENT_BUS.emit(project_id, "report_ready", report.model_dump())
 
     msg_body = (
-        f"**核查报告已生成** — **{report.verdict_label}**（就绪度 `{report.readiness_score}/100`）\n\n"
-        f"- **条款统计**：共 `{total}` 项 · 已响应 `{passed}` · 待补充 `{partial}` · 未响应 `{missing}`\n"
-        f"- **风险分布**：废标红线 `{fatal_issues}` 处 · 扣分风险 `{score_issues}` 处 · 形式瑕疵 `{minor_issues}` 处\n\n"
+        f"**{report.verdict_label}** · 就绪度 `{report.readiness_score}/100`\n\n"
+        f"- 通过 `{passed}` · 待补充 `{partial}` · 未响应 `{missing}` · 红线 `{fatal_issues}`\n\n"
         f"{report.executive_summary}"
     )
     chat_msg = append_message(

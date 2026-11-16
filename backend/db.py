@@ -213,7 +213,7 @@ def save_settings(settings: AppSettings) -> AppSettings:
         return settings
 
 
-def create_project(name: str = "新建投标核查项目") -> ProjectDetail:
+def create_project(name: str = "新建项目") -> ProjectDetail:
     pid = f"proj_{uuid.uuid4().hex[:10]}"
     ts = now_iso()
     telemetry = TelemetrySnapshot(project_id=pid, stage="idle", stage_label="就绪")

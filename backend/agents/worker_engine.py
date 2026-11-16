@@ -292,7 +292,7 @@ async def execute_inspection_workflow(project_id: str, recheck_only: bool = Fals
     await EVENT_BUS.sync_and_broadcast_telemetry(
         project_id,
         stage="inspecting",
-        stage_label=f"并发核查中 (0/{len(target_items)})" if recheck_only else f"并发核查中 ({already_done}/{total_enabled})",
+        stage_label=f"核查中 0/{len(target_items)}" if recheck_only else f"核查中 {already_done}/{total_enabled}",
         completed_items=already_done,
         total_items=total_enabled,
     )
@@ -320,7 +320,7 @@ async def execute_inspection_workflow(project_id: str, recheck_only: bool = Fals
             await EVENT_BUS.sync_and_broadcast_telemetry(
                 project_id,
                 stage="inspecting",
-                stage_label=f"并发核查中 ({done_counter[0]}/{total_enabled})",
+                stage_label=f"核查中 {done_counter[0]}/{total_enabled}",
                 completed_items=done_counter[0],
                 total_items=total_enabled,
             )

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, Check, Loader2, Wifi, Plus, Eye, EyeOff } from 'lucide-react';
+import { X, Check, Loader2, Wifi, Plus, Eye, EyeOff, Sun, Moon, Monitor } from 'lucide-react';
 import { api } from '../api';
+import type { ThemeMode } from '../theme';
 import type {
   AppSettings,
   ProviderConfig,
@@ -12,9 +13,16 @@ import type {
 interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
+  themeMode: ThemeMode;
+  onChangeThemeMode: (mode: ThemeMode) => void;
 }
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) => {
+export const SettingsModal: React.FC<SettingsModalProps> = ({
+  open,
+  onClose,
+  themeMode,
+  onChangeThemeMode,
+}) => {
   const [tab, setTab] = useState<'providers' | 'routes'>('providers');
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
@@ -37,11 +45,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
         setSelectedProvId(res.settings.providers[0].id);
       }
     });
-  }, [open]);
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
 
   if (!open || !settings) return null;
 
-  const activeProv = settings.providers.find((p) => p.id === selectedProvId) || settings.providers[0];
+  const activeProv =
+    settings.providers.find((p) => p.id === selectedProvId) || settings.providers[0];
   const activePreset = presets.find((p) => p.id === activeProv?.id);
 
   const updateProvider = (patch: Partial<ProviderConfig>) => {
@@ -59,7 +74,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
     const newId = `custom_${Date.now().toString(36).slice(-4)}`;
     const newProv: ProviderConfig = {
       id: newId,
-      name: '自定义供应商',
+      name: '自定义网关',
       base_url: 'https://api.openai.com/v1',
       api_key: '',
       currency: 'CNY',
@@ -87,7 +102,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
       const res = await api.saveSettings(settings);
       setSettings(res.settings);
       setSavedToast(true);
-      setTimeout(() => setSavedToast(false), 1800);
+      setTimeout(() => setSavedToast(false), 1600);
     } finally {
       setSaving(false);
     }
@@ -104,7 +119,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
     setTestResult(null);
     try {
       const res = await api.testConnection(activeProv.base_url, activeProv.api_key, modelToTest);
-      setTestResult({ ok: true, msg: `连通正常 (${res.latency_ms}ms · ${res.model})` });
+      setTestResult({ ok: true, msg: `正常 · ${res.latency_ms}ms (${res.model})` });
     } catch (err) {
       setTestResult({ ok: false, msg: err instanceof Error ? err.message : '连接失败' });
     } finally {
@@ -112,45 +127,63 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
     }
   };
 
-  return (
-    <div className="fixed inset-0 bg-black/30 backdrop-blur-[2px] z-50 flex items-center justify-center p-4">
-      <div className="w-[740px] max-w-full h-[520px] rounded-[14px] bg-[#F5F5F7] shadow-[0_24px_60px_rgba(0,0,0,0.22)] border border-black/[0.1] flex flex-col overflow-hidden">
-        {/* macOS Sheet Titlebar */}
-        <div className="h-[46px] px-4 bg-white border-b border-black/[0.08] flex items-center justify-between shrink-0">
-          <span className="text-[13px] font-semibold text-[#1D1D1F]">大模型 API 与角色配置</span>
+  const appearanceOptions: { mode: ThemeMode; label: string; icon: React.ReactNode }[] = [
+    { mode: 'light', label: '浅色', icon: <Sun className="w-3 h-3" /> },
+    { mode: 'dark', label: '深色', icon: <Moon className="w-3 h-3" /> },
+    { mode: 'system', label: '自动', icon: <Monitor className="w-3 h-3" /> },
+  ];
 
-          <div className="bg-black/[0.06] p-0.5 rounded-[7px] flex items-center gap-0.5">
+  return (
+    <div
+      onClick={onClose}
+      className="fixed inset-0 bg-black/35 dark:bg-black/60 backdrop-blur-[3px] z-50 flex items-center justify-center p-4"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-[730px] max-w-full h-[510px] rounded-[14px] bg-[#F4F4F6] dark:bg-[#1C1C20] shadow-[0_28px_70px_rgba(0,0,0,0.28)] dark:shadow-[0_32px_80px_rgba(0,0,0,0.68)] border border-black/[0.1] dark:border-white/[0.12] flex flex-col overflow-hidden"
+      >
+        {/* macOS System Settings Titlebar */}
+        <div className="h-[46px] px-4 macos-toolbar flex items-center justify-between shrink-0">
+          <span className="text-[13px] font-semibold text-[#1D1D1F] dark:text-[#F5F5F7]">
+            设置
+          </span>
+
+          <div className="macos-segmented p-[2px] rounded-[7px] flex items-center gap-0.5">
             <button
               onClick={() => setTab('providers')}
               className={`px-3 py-1 rounded-[5px] text-[12px] font-medium transition-all ${
-                tab === 'providers' ? 'bg-white shadow-xs text-[#1D1D1F]' : 'text-[#6E6E73]'
+                tab === 'providers'
+                  ? 'macos-segmented-active text-[#1D1D1F] dark:text-[#F5F5F7]'
+                  : 'text-[#6E6E73] dark:text-[#98989D]'
               }`}
             >
-              API 供应商密钥
+              供应商
             </button>
             <button
               onClick={() => setTab('routes')}
               className={`px-3 py-1 rounded-[5px] text-[12px] font-medium transition-all ${
-                tab === 'routes' ? 'bg-white shadow-xs text-[#1D1D1F]' : 'text-[#6E6E73]'
+                tab === 'routes'
+                  ? 'macos-segmented-active text-[#1D1D1F] dark:text-[#F5F5F7]'
+                  : 'text-[#6E6E73] dark:text-[#98989D]'
               }`}
             >
-              四角色路由分工
+              模型路由
             </button>
           </div>
 
           <button
             onClick={onClose}
-            className="p-1 rounded-full hover:bg-black/[0.06] text-[#6E6E73]"
+            className="w-6 h-6 rounded-full hover:bg-black/[0.06] dark:hover:bg-white/[0.1] text-[#6E6E73] dark:text-[#98989D] flex items-center justify-center transition-colors"
           >
-            <X className="w-4 h-4" />
+            <X className="w-3.5 h-3.5" />
           </button>
         </div>
 
         {/* Body */}
         {tab === 'providers' ? (
           <div className="flex-1 flex min-h-0">
-            {/* Left Provider List */}
-            <div className="w-[210px] border-r border-black/[0.08] bg-[#ECECEF]/70 p-2 flex flex-col">
+            {/* Left Provider Source List */}
+            <div className="w-[205px] macos-sidebar p-2 flex flex-col">
               <div className="flex-1 overflow-y-auto space-y-0.5">
                 {settings.providers.map((p) => {
                   const active = p.id === activeProv?.id;
@@ -162,14 +195,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
                         setSelectedProvId(p.id);
                         setTestResult(null);
                       }}
-                      className={`w-full text-left px-2.5 py-2 rounded-[7px] text-[12px] flex items-center justify-between transition-colors ${
-                        active ? 'bg-[#007AFF] text-white font-medium' : 'text-[#1D1D1F] hover:bg-black/[0.05]'
+                      className={`w-full text-left px-2.5 py-[7px] rounded-[7px] text-[12px] flex items-center justify-between transition-all ${
+                        active
+                          ? 'macos-sidebar-active font-medium'
+                          : 'text-[#1D1D1F] dark:text-[#E5E5EA] hover:bg-black/[0.045] dark:hover:bg-white/[0.06]'
                       }`}
                     >
                       <span className="truncate">{p.name}</span>
                       <span
                         className={`w-2 h-2 rounded-full shrink-0 ${
-                          hasKey ? (active ? 'bg-white' : 'bg-[#34C759]') : 'bg-black/[0.15]'
+                          hasKey
+                            ? active
+                              ? 'bg-white'
+                              : 'bg-[#34C759] dark:bg-[#30D158]'
+                            : 'bg-black/[0.14] dark:bg-white/[0.16]'
                         }`}
                       />
                     </button>
@@ -178,41 +217,41 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
               </div>
               <button
                 onClick={addCustomProvider}
-                className="mt-2 h-[28px] rounded-[6px] bg-white border border-black/[0.1] hover:bg-black/[0.03] text-[11.5px] font-medium text-[#1D1D1F] flex items-center justify-center gap-1"
+                className="mt-2 h-[28px] rounded-[6px] macos-btn-secondary text-[11.5px] font-medium text-[#1D1D1F] dark:text-[#F5F5F7] flex items-center justify-center gap-1"
               >
                 <Plus className="w-3.5 h-3.5" />
-                <span>新增兼容网关</span>
+                <span>添加网关</span>
               </button>
             </div>
 
-            {/* Right Provider Editor */}
+            {/* Right Provider Form */}
             {activeProv && (
-              <div className="flex-1 p-5 bg-white overflow-y-auto space-y-4">
+              <div className="flex-1 p-5 bg-white dark:bg-[#1E1E22] overflow-y-auto space-y-4">
                 <div>
-                  <label className="block text-[11.5px] font-medium text-[#6E6E73] mb-1">
-                    供应商名称
+                  <label className="block text-[11px] font-medium text-[#8E8E93] mb-1">
+                    名称
                   </label>
                   <input
                     value={activeProv.name}
                     onChange={(e) => updateProvider({ name: e.target.value })}
-                    className="w-full h-[32px] px-3 rounded-[7px] border border-black/[0.14] focus:border-[#007AFF] outline-none text-[12.5px]"
+                    className="w-full h-[32px] px-3 rounded-[7px] macos-input outline-none text-[12.5px] text-[#1D1D1F] dark:text-[#F5F5F7]"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-[11.5px] font-medium text-[#6E6E73] mb-1">
-                    OpenAI 兼容 Base URL
+                  <label className="block text-[11px] font-medium text-[#8E8E93] mb-1">
+                    Base URL
                   </label>
                   <input
                     value={activeProv.base_url}
                     onChange={(e) => updateProvider({ base_url: e.target.value })}
                     placeholder="https://api.deepseek.com/v1"
-                    className="w-full h-[32px] px-3 rounded-[7px] border border-black/[0.14] focus:border-[#007AFF] outline-none text-[12.5px] font-mono"
+                    className="w-full h-[32px] px-3 rounded-[7px] macos-input outline-none text-[12.5px] text-[#1D1D1F] dark:text-[#F5F5F7] font-mono"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-[11.5px] font-medium text-[#6E6E73] mb-1">
+                  <label className="block text-[11px] font-medium text-[#8E8E93] mb-1">
                     API Key
                   </label>
                   <div className="relative">
@@ -221,40 +260,38 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
                       value={activeProv.api_key}
                       onChange={(e) => updateProvider({ api_key: e.target.value })}
                       placeholder="sk-..."
-                      className="w-full h-[32px] pl-3 pr-9 rounded-[7px] border border-black/[0.14] focus:border-[#007AFF] outline-none text-[12.5px] font-mono"
+                      className="w-full h-[32px] pl-3 pr-9 rounded-[7px] macos-input outline-none text-[12.5px] text-[#1D1D1F] dark:text-[#F5F5F7] font-mono"
                     />
                     <button
                       type="button"
                       onClick={() => setShowKey((v) => !v)}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#8E8E93] hover:text-[#1D1D1F]"
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#8E8E93] hover:text-[#1D1D1F] dark:hover:text-[#F5F5F7]"
                     >
                       {showKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                     </button>
                   </div>
                 </div>
 
-                {/* Connectivity Quick Check */}
-                <div className="pt-2 border-t border-black/[0.06] space-y-2">
+                {/* Connectivity Test */}
+                <div className="pt-2.5 border-t border-black/[0.06] dark:border-white/[0.07] space-y-2.5">
                   <div className="flex items-center gap-2">
                     <input
                       value={testModel}
                       onChange={(e) => setTestModel(e.target.value)}
-                      placeholder={
-                        activePreset?.suggested_models[0]?.id || '输入测试模型 ID (如 qwen-plus)'
-                      }
-                      className="flex-1 h-[30px] px-2.5 rounded-[6px] border border-black/[0.12] text-[12px] font-mono outline-none focus:border-[#007AFF]"
+                      placeholder={activePreset?.suggested_models[0]?.id || '模型 ID'}
+                      className="flex-1 h-[30px] px-2.5 rounded-[6px] macos-input text-[12px] text-[#1D1D1F] dark:text-[#F5F5F7] font-mono outline-none"
                     />
                     <button
                       disabled={testing || !activeProv.api_key.trim()}
                       onClick={handleTest}
-                      className="h-[30px] px-3 rounded-[6px] bg-[#F5F5F7] hover:bg-black/[0.08] disabled:opacity-45 text-[12px] font-medium text-[#1D1D1F] flex items-center gap-1.5"
+                      className="h-[30px] px-3 rounded-[6px] macos-btn-secondary disabled:opacity-45 text-[12px] font-medium text-[#1D1D1F] dark:text-[#F5F5F7] flex items-center gap-1.5"
                     >
                       {testing ? (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin text-[#007AFF]" />
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-[#007AFF] dark:text-[#0A84FF]" />
                       ) : (
-                        <Wifi className="w-3.5 h-3.5 text-[#007AFF]" />
+                        <Wifi className="w-3.5 h-3.5 text-[#007AFF] dark:text-[#409CFF]" />
                       )}
-                      <span>连通性测试</span>
+                      <span>测试</span>
                     </button>
                   </div>
 
@@ -262,8 +299,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
                     <div
                       className={`text-[11.5px] px-2.5 py-1.5 rounded-[6px] ${
                         testResult.ok
-                          ? 'bg-[#34C759]/10 text-[#15803D]'
-                          : 'bg-[#FF3B30]/10 text-[#DC2626]'
+                          ? 'bg-[#34C759]/12 dark:bg-[#30D158]/18 text-[#15803D] dark:text-[#30D158]'
+                          : 'bg-[#FF3B30]/12 dark:bg-[#FF453A]/18 text-[#DC2626] dark:text-[#FF6961]'
                       }`}
                     >
                       {testResult.msg}
@@ -271,19 +308,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
                   )}
 
                   {activePreset && activePreset.suggested_models.length > 0 && (
-                    <div className="pt-1">
-                      <div className="text-[11px] text-[#8E8E93] mb-1.5">常用模型标识（点击填入测试）</div>
-                      <div className="flex flex-wrap gap-1.5">
-                        {activePreset.suggested_models.map((sm) => (
-                          <button
-                            key={sm.id}
-                            onClick={() => setTestModel(sm.id)}
-                            className="px-2 py-0.5 rounded-[5px] bg-[#F5F5F7] hover:bg-black/[0.08] text-[11px] text-[#515154] font-mono"
-                          >
-                            {sm.id}
-                          </button>
-                        ))}
-                      </div>
+                    <div className="flex flex-wrap gap-1.5 pt-0.5">
+                      {activePreset.suggested_models.map((sm) => (
+                        <button
+                          key={sm.id}
+                          onClick={() => setTestModel(sm.id)}
+                          className="px-2 py-0.5 rounded-[5px] macos-well hover:bg-black/[0.06] dark:hover:bg-white/[0.1] text-[11px] text-[#515154] dark:text-[#AEAEB2] font-mono transition-colors"
+                        >
+                          {sm.id}
+                        </button>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -299,25 +333,29 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
               const presetForProv = presets.find((p) => p.id === route.provider_id);
 
               return (
-                <div
-                  key={rDef.role}
-                  className="rounded-[10px] bg-white border border-black/[0.07] p-3.5 space-y-2.5"
-                >
+                <div key={rDef.role} className="rounded-[10px] macos-card p-3.5 space-y-2.5">
                   <div className="flex items-center justify-between">
-                    <div>
-                      <span className="text-[13px] font-semibold text-[#1D1D1F]">{rDef.label}</span>
-                      <span className="ml-2 text-[11.5px] text-[#8E8E93]">{rDef.desc}</span>
-                    </div>
+                    <span className="text-[12.5px] font-semibold text-[#1D1D1F] dark:text-[#F5F5F7]">
+                      {rDef.label}
+                    </span>
+
                     {rDef.role === 'vision_worker' && (
-                      <label className="flex items-center gap-1.5 text-[11.5px] text-[#515154] cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={route.enabled}
-                          onChange={(e) => updateRoute(rDef.role, { enabled: e.target.checked })}
-                          className="accent-[#007AFF]"
-                        />
-                        <span>启用视觉核验</span>
-                      </label>
+                      <button
+                        type="button"
+                        onClick={() => updateRoute(rDef.role, { enabled: !route.enabled })}
+                        className="flex items-center gap-2 text-[11.5px] text-[#6E6E73] dark:text-[#98989D]"
+                      >
+                        <span>启用</span>
+                        <span
+                          className={`w-[30px] h-[17px] rounded-full p-[2px] transition-colors flex items-center ${
+                            route.enabled
+                              ? 'bg-[#34C759] dark:bg-[#30D158] justify-end'
+                              : 'bg-black/[0.15] dark:bg-white/[0.18] justify-start'
+                          }`}
+                        >
+                          <span className="w-[13px] h-[13px] rounded-full bg-white shadow-xs" />
+                        </span>
+                      </button>
                     )}
                   </div>
 
@@ -341,7 +379,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
                               : {}),
                           });
                         }}
-                        className="w-full h-[30px] rounded-[6px] border border-black/[0.12] px-2 text-[12px] bg-white outline-none focus:border-[#007AFF]"
+                        className="w-full h-[30px] rounded-[6px] macos-input px-2 text-[12px] text-[#1D1D1F] dark:text-[#F5F5F7] outline-none"
                       >
                         {settings.providers.map((p) => (
                           <option key={p.id} value={p.id}>
@@ -352,9 +390,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
                     </div>
 
                     <div className="col-span-4">
-                      <label className="block text-[10.5px] text-[#8E8E93] mb-0.5">
-                        模型名称 (支持手动输入或选预设)
-                      </label>
+                      <label className="block text-[10.5px] text-[#8E8E93] mb-0.5">模型</label>
                       <input
                         list={`models-${rDef.role}`}
                         value={route.model}
@@ -371,7 +407,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
                               : {}),
                           });
                         }}
-                        className="w-full h-[30px] rounded-[6px] border border-black/[0.12] px-2.5 text-[12px] font-mono outline-none focus:border-[#007AFF]"
+                        className="w-full h-[30px] rounded-[6px] macos-input px-2.5 text-[12px] text-[#1D1D1F] dark:text-[#F5F5F7] font-mono outline-none"
                       />
                       <datalist id={`models-${rDef.role}`}>
                         {(presetForProv?.suggested_models || []).map((m) => (
@@ -383,7 +419,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
                     </div>
 
                     <div className="col-span-2">
-                      <label className="block text-[10.5px] text-[#8E8E93] mb-0.5">最大并发</label>
+                      <label className="block text-[10.5px] text-[#8E8E93] mb-0.5">并发</label>
                       <input
                         type="number"
                         min={1}
@@ -394,13 +430,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
                             concurrency: Math.max(1, Number(e.target.value) || 1),
                           })
                         }
-                        className="w-full h-[30px] rounded-[6px] border border-black/[0.12] px-2 text-[12px] tabular-nums outline-none focus:border-[#007AFF]"
+                        className="w-full h-[30px] rounded-[6px] macos-input px-2 text-[12px] text-[#1D1D1F] dark:text-[#F5F5F7] tabular-nums outline-none"
                       />
                     </div>
 
                     <div className="col-span-2">
                       <label className="block text-[10.5px] text-[#8E8E93] mb-0.5">
-                        单价(元/M入·出)
+                        单价 (¥/M)
                       </label>
                       <div className="flex items-center gap-1">
                         <input
@@ -412,7 +448,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
                               input_price_per_m: Math.max(0, Number(e.target.value) || 0),
                             })
                           }
-                          className="w-1/2 h-[30px] rounded-[6px] border border-black/[0.12] px-1.5 text-[11px] tabular-nums outline-none"
+                          className="w-1/2 h-[30px] rounded-[6px] macos-input px-1.5 text-[11px] text-[#1D1D1F] dark:text-[#F5F5F7] tabular-nums outline-none"
                         />
                         <input
                           type="number"
@@ -423,7 +459,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
                               output_price_per_m: Math.max(0, Number(e.target.value) || 0),
                             })
                           }
-                          className="w-1/2 h-[30px] rounded-[6px] border border-black/[0.12] px-1.5 text-[11px] tabular-nums outline-none"
+                          className="w-1/2 h-[30px] rounded-[6px] macos-input px-1.5 text-[11px] text-[#1D1D1F] dark:text-[#F5F5F7] tabular-nums outline-none"
                         />
                       </div>
                     </div>
@@ -434,28 +470,54 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
           </div>
         )}
 
-        {/* Footer */}
-        <div className="h-[48px] px-4 bg-white border-t border-black/[0.08] flex items-center justify-end gap-2.5 shrink-0">
-          {savedToast && (
-            <span className="text-[12px] text-[#34C759] flex items-center gap-1 mr-auto font-medium">
-              <Check className="w-3.5 h-3.5" />
-              <span>已保存</span>
-            </span>
-          )}
-          <button
-            onClick={onClose}
-            className="h-[30px] px-3.5 rounded-[7px] bg-black/[0.05] hover:bg-black/[0.09] text-[12.5px] font-medium text-[#1D1D1F]"
-          >
-            关闭
-          </button>
-          <button
-            disabled={saving}
-            onClick={handleSave}
-            className="h-[30px] px-4 rounded-[7px] bg-[#007AFF] hover:bg-[#0066D6] text-[12.5px] font-medium text-white flex items-center gap-1.5"
-          >
-            {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-            <span>保存配置</span>
-          </button>
+        {/* Footer: Appearance Switcher on Left + Save Actions on Right */}
+        <div className="h-[48px] px-4 bg-white/85 dark:bg-[#1E1E22]/85 backdrop-blur-md border-t border-black/[0.08] dark:border-white/[0.08] flex items-center justify-between gap-2.5 shrink-0">
+          <div className="flex items-center gap-2">
+            <span className="text-[11.5px] text-[#8E8E93]">外观</span>
+            <div className="macos-segmented p-[2px] rounded-[7px] flex items-center gap-0.5">
+              {appearanceOptions.map((opt) => {
+                const active = themeMode === opt.mode;
+                return (
+                  <button
+                    key={opt.mode}
+                    type="button"
+                    onClick={() => onChangeThemeMode(opt.mode)}
+                    className={`h-[24px] px-2.5 rounded-[5px] text-[11.5px] font-medium flex items-center gap-1 transition-all ${
+                      active
+                        ? 'macos-segmented-active text-[#1D1D1F] dark:text-[#F5F5F7]'
+                        : 'text-[#6E6E73] dark:text-[#98989D]'
+                    }`}
+                  >
+                    {opt.icon}
+                    <span>{opt.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {savedToast && (
+              <span className="text-[12px] text-[#34C759] dark:text-[#30D158] flex items-center gap-1 mr-1 font-medium">
+                <Check className="w-3.5 h-3.5" />
+                <span>已保存</span>
+              </span>
+            )}
+            <button
+              onClick={onClose}
+              className="h-[29px] px-3.5 rounded-[7px] macos-btn-secondary text-[12px] font-medium text-[#1D1D1F] dark:text-[#F5F5F7]"
+            >
+              完成
+            </button>
+            <button
+              disabled={saving}
+              onClick={handleSave}
+              className="h-[29px] px-4 rounded-[7px] macos-btn-primary text-[12px] font-medium flex items-center gap-1.5"
+            >
+              {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              <span>保存</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>

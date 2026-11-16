@@ -1,6 +1,6 @@
 [project]
 name = "bidguard"
-version = "0.1.0"
+version = "0.2.0"
 description = "标书自动检查工作台 — 基于大模型多 Agent 协同与 OOXML 深度解析的投标响应核查系统"
 readme = "README.md"
 requires-python = ">=3.11"

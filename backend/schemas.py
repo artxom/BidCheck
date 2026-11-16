@@ -17,11 +17,11 @@ CategoryType = Literal[
 ]
 
 CATEGORY_LABELS: dict[str, str] = {
-    "qualification": "资格与符合性审查",
-    "commercial_scoring": "商务与资信评分项",
-    "technical_scoring": "技术与服务评分项",
-    "procurement_req": "采购需求与技术条款",
-    "format_redline": "格式模板与形式红线",
+    "qualification": "资格审查",
+    "commercial_scoring": "商务资信",
+    "technical_scoring": "技术方案",
+    "procurement_req": "采购需求",
+    "format_redline": "形式红线",
 }
 
 RISK_LABELS: dict[str, str] = {
@@ -33,7 +33,7 @@ RISK_LABELS: dict[str, str] = {
 STATUS_LABELS: dict[str, str] = {
     "unchecked": "待检查",
     "passed": "已响应",
-    "partial": "待补充/存疑",
+    "partial": "待补充",
     "missing": "未响应",
 }
 

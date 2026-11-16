@@ -9,9 +9,12 @@ if [ ! -d ".venv" ]; then
   .venv/bin/pip install -e .
 fi
 
-if [ ! -f "frontend/dist/index.html" ]; then
+if [ ! -f "frontend/dist/index.html" ] || [ -n "$(find frontend/src frontend/index.html frontend/package.json -newer frontend/dist/index.html 2>/dev/null)" ]; then
   echo "[BidGuard] 正在构建前端静态资源..."
-  (cd frontend && npm install --no-audit --no-fund && npm run build)
+  if [ ! -d "frontend/node_modules" ]; then
+    (cd frontend && npm install --no-audit --no-fund)
+  fi
+  (cd frontend && npm run build)
 fi
 
 PORT="${PORT:-8000}"

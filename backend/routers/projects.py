@@ -34,7 +34,7 @@ router = APIRouter(prefix="/api", tags=["projects"])
 
 
 class CreateProjectReq(BaseModel):
-    name: str = "新建投标核查项目"
+    name: str = "新建项目"
 
 
 class MountLocalDocReq(BaseModel):
@@ -73,7 +73,7 @@ async def _finalize_mounted_doc(project_id: str, doc_role: str, file_path: Path)
     await EVENT_BUS.sync_and_broadcast_telemetry(
         project_id,
         stage="parsing",
-        stage_label=f"正在解析{'招标文件' if doc_role == 'tender' else '响应文件'}…",
+        stage_label=f"解析{'招标' if doc_role == 'tender' else '响应'}文档",
     )
 
     doc_id = f"{project_id}_{doc_role}_{uuid.uuid4().hex[:6]}"
@@ -129,8 +129,7 @@ async def _finalize_mounted_doc(project_id: str, doc_role: str, file_path: Path)
             msg = append_message(
                 project_id,
                 "assistant",
-                f"已挂载新版响应文件 `{ast.filename}`（`{ast.total_pages}` 页 · 内置扫描发现 `{len(ast.deterministic_findings)}` 处形式提醒）。\n"
-                f"可发送 **「仅复检问题项」** 快速核验修订结果，或发送 **「重新生成计划」** 全量重查。",
+                f"已更新响应文件 `{ast.filename}`（`{ast.total_pages}` 页 · 形式预警 `{len(ast.deterministic_findings)}` 处）。",
             )
             await EVENT_BUS.sync_and_broadcast_telemetry(project_id, stage="awaiting_confirm", stage_label="待复检")
             await EVENT_BUS.emit(project_id, "chat_message", msg.model_dump())
@@ -138,7 +137,7 @@ async def _finalize_mounted_doc(project_id: str, doc_role: str, file_path: Path)
             # Launch planning asynchronously so upload HTTP returns fast while chat streams plan!
             asyncio.create_task(_safe_plan_task(project_id))
     else:
-        await EVENT_BUS.sync_and_broadcast_telemetry(project_id, stage="idle", stage_label="待补齐另一份文档")
+        await EVENT_BUS.sync_and_broadcast_telemetry(project_id, stage="idle", stage_label="待导入文档")
 
     return {"project": get_project(project_id).model_dump()}  # type: ignore[union-attr]
 

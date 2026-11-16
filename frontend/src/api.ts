@@ -30,7 +30,7 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
 export const api = {
   listProjects: () => requestJson<{ projects: ProjectListItem[] }>('/api/projects'),
 
-  createProject: (name = '新建投标核查项目') =>
+  createProject: (name = '新建项目') =>
     requestJson<{ project: ProjectDetail }>('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

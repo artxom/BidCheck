@@ -98,7 +98,7 @@ PROVIDER_PRESETS: list[dict[str, Any]] = [
     },
     {
         "id": "custom",
-        "name": "自定义 OpenAI 兼容网关 (NewAPI / OneAPI / vLLM)",
+        "name": "自定义兼容网关",
         "base_url": "http://localhost:8000/v1",
         "suggested_models": [],
         "currency": "CNY",
@@ -108,26 +108,26 @@ PROVIDER_PRESETS: list[dict[str, Any]] = [
 ROLE_DEFINITIONS: list[dict[str, Any]] = [
     {
         "role": "master",
-        "label": "Master 主控 Agent",
-        "desc": "负责需求对话、标段识别与检查计划制定",
+        "label": "主控规划 (Master)",
+        "desc": "对话与清单编排",
         "default_concurrency": 2,
     },
     {
         "role": "text_worker",
-        "label": "文本并发检查模块",
-        "desc": "负责高并发逐章节核对条款响应情况",
+        "label": "文本核查 (Text)",
+        "desc": "并发章节条款比对",
         "default_concurrency": 6,
     },
     {
         "role": "vision_worker",
-        "label": "视觉图片核验模块",
-        "desc": "按需核验证照、财报、身份证及业绩合同扫描件",
+        "label": "视觉验图 (Vision)",
+        "desc": "证照与扫描件核验",
         "default_concurrency": 3,
     },
     {
         "role": "report_assembler",
-        "label": "报告组装 Agent",
-        "desc": "负责统计全局结果、评估封标风险并生成总结",
+        "label": "报告总装 (Report)",
+        "desc": "风险评级与结论汇总",
         "default_concurrency": 2,
     },
 ]

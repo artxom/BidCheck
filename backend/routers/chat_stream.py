@@ -72,9 +72,9 @@ async def api_start_run(project_id: str, req: RunRequest) -> dict[str, Any]:
     if started:
         enabled_cnt = sum(1 for it in proj.checklist if it.enabled)
         note = (
-            "已启动增量复检，正在核对未通过与待补充条目…"
+            "已开始复检问题项。"
             if req.recheck_only
-            else f"已启动并发核查（共 `{enabled_cnt}` 项），正在逐章核对响应内容…"
+            else f"已开始并发核查（`{enabled_cnt}` 项）。"
         )
         msg = append_message(project_id, "assistant", note, msg_type="text")
         await EVENT_BUS.emit(project_id, "chat_message", msg.model_dump())

@@ -19,7 +19,7 @@ MASTER_PLANNER_SYSTEM_PROMPT = """你是中国大陆政企招投标领域的首�
 ### 严格输出 JSON 格式（不要输出任何额外解释）：
 {
   "target_lot": "识别到的标段代号（如 C，无标段则填 空字符串）",
-  "plan_intro": "向用户简要汇报识别到的项目信息、目标标段及检查编排思路（2~3句话，干练直接）",
+  "plan_intro": "一句话简报锁定的项目与标段（30字以内，克制干练，不加客套话）",
   "items": [
     {
       "category": "qualification | commercial_scoring | technical_scoring | procurement_req | format_redline",

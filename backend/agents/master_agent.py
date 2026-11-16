@@ -63,7 +63,7 @@ async def generate_inspection_plan(
     await EVENT_BUS.sync_and_broadcast_telemetry(
         project_id,
         stage="planning",
-        stage_label="Master 正在拆解招标要求…",
+        stage_label="规划中",
     )
 
     tender_ast = await asyncio.to_thread(
@@ -87,17 +87,17 @@ async def generate_inspection_plan(
     )
 
     if not LLM_GATEWAY.has_configured_key("master"):
-        await EVENT_BUS.sync_and_broadcast_telemetry(project_id, stage="idle", stage_label="待配置模型 API Key")
+        await EVENT_BUS.sync_and_broadcast_telemetry(project_id, stage="idle", stage_label="待配置密钥")
         det_cnt = len(response_ast.deterministic_findings)
-        lot_info = f"**{detected_lot} 标段**" if detected_lot else "未区分标段"
+        lot_info = f"**{detected_lot}标段**" if detected_lot else "单标段"
         msg = append_message(
             project_id,
             role="assistant",
             content=(
-                f"已完成双文档结构拆解：\n"
-                f"- **招标文件**：共 `{tender_ast.total_pages}` 页、`{len(tender_ast.sections)}` 个章节、`{tender_ast.total_tables}` 张表格（含标段：{', '.join(tender_ast.detected_lots) or '单标段'}）\n"
-                f"- **响应文件**：共 `{response_ast.total_pages}` 页、`{len(response_ast.sections)}` 个章节、`{response_ast.total_images}` 张图片，自动锁定 **{lot_info}**，内置扫描已预先捕获 **{det_cnt} 处**留空/待补充/落款预警。\n\n"
-                f"请先点击右上角 **设置图标** 配置大模型 API Key，随后发送「生成检查计划」即可由我为您编排完整核查清单。"
+                f"**文档已就绪**\n"
+                f"- 招标：`{tender_ast.total_pages}` 页 · `{len(tender_ast.sections)}` 节（{', '.join(tender_ast.detected_lots) or '单标段'}）\n"
+                f"- 响应：`{response_ast.total_pages}` 页 · `{response_ast.total_images}` 图 · {lot_info} · 形式预警 `{det_cnt}` 处\n\n"
+                f"请先配置 API Key（`⌘,`）。"
             ),
             msg_type="text",
         )
@@ -189,7 +189,7 @@ async def generate_inspection_plan(
     await EVENT_BUS.sync_and_broadcast_telemetry(
         project_id,
         stage="awaiting_confirm",
-        stage_label="待确认检查计划",
+        stage_label="待确认",
         completed_items=0,
         total_items=len(checklist),
         estimated_plan_tokens=est_tokens,
@@ -201,14 +201,13 @@ async def generate_inspection_plan(
     fatal_cnt = sum(1 for it in checklist if it.risk_level == "fatal")
     intro = str(plan_json.get("plan_intro") or "").strip()
     if not intro:
-        intro = f"已完成招标文件拆解并锁定 **{final_lot + '标段' if final_lot else '全部要求'}**，共规整出 **{len(checklist)} 项**检查目标。"
+        intro = f"已锁定 **{final_lot + '标段' if final_lot else '全部要求'}**，共提取 **{len(checklist)} 项**核查条款。"
 
     msg_md = (
         f"{intro}\n\n"
-        f"- **检查项分布**：共 `{len(checklist)}` 项（其中废标红线 `{fatal_cnt}` 项 · 需多模态验图 `{vision_cnt}` 项）\n"
-        f"- **固有扫描预警**：已预先定位 `{len(response_ast.deterministic_findings)}` 处留空/待补充/落款提醒\n"
-        f"- **预计消耗**：约 `{est_tokens // 1000}k` Tokens · 预计耗时约 `{est_sec}` 秒\n\n"
-        f"您可在右侧查看或勾选调整具体条目，也可直接对我说明调整要求（如“跳过荣誉证书检查”），确认无误后点击下方按钮或回复 **「开始检查」**。"
+        f"- **清单**：`{len(checklist)}` 项（红线 `{fatal_cnt}` · 验图 `{vision_cnt}`）\n"
+        f"- **形式预警**：`{len(response_ast.deterministic_findings)}` 处\n"
+        f"- **预估**：`~{max(1, est_tokens // 1000)}k` Tokens · `~{est_sec}s`"
     )
     msg = append_message(
         project_id,
@@ -239,29 +238,29 @@ async def handle_user_chat(project_id: str, user_text: str) -> ChatMessage:
         raise ValueError("项目不存在")
 
     # Fast deterministic shortcuts for unambiguous execution commands
-    if clean_input in ("开始", "开始检查", "确认", "确认开始", "确认执行", "立即检查"):
+    if clean_input in ("开始", "开始检查", "开始核查", "确认", "确认开始", "确认执行", "立即检查"):
         if not proj.checklist:
             if proj.tender_doc and proj.response_doc:
                 return await generate_inspection_plan(project_id)
-            reply = append_message(project_id, "assistant", "请先挂载《招标文件》与《响应文件》。")
+            reply = append_message(project_id, "assistant", "请先导入招标与响应文件。")
             await EVENT_BUS.emit(project_id, "chat_message", reply.model_dump())
             return reply
         started = launch_background_inspection(project_id, recheck_only=False)
         txt = (
-            f"已启动全量并发检查（共 `{sum(1 for i in proj.checklist if i.enabled)}` 项），可在顶部状态栏与右侧「实况」面板实时查看各模块核查进度。"
+            f"已开始并发核查（`{sum(1 for i in proj.checklist if i.enabled)}` 项）。"
             if started
-            else "当前检查任务正在运行中，请查看右侧实时进度。"
+            else "核查正在进行中。"
         )
         reply = append_message(project_id, "assistant", txt)
         await EVENT_BUS.emit(project_id, "chat_message", reply.model_dump())
         return reply
 
-    if clean_input in ("生成检查计划", "重新规划", "重新生成计划"):
+    if clean_input in ("生成清单", "生成检查计划", "重新规划", "重新生成计划"):
         return await generate_inspection_plan(project_id)
 
-    if clean_input in ("复检", "仅复检问题项", "复查问题项", "重新检查未通过项"):
+    if clean_input in ("复检", "复检问题项", "仅复检问题项", "复查问题项", "重新检查未通过项"):
         started = launch_background_inspection(project_id, recheck_only=True)
-        txt = "已启动增量复检，仅针对待补充、未响应及异常条目重新核查。" if started else "当前已有检查任务正在运行中。"
+        txt = "已开始复检问题项。" if started else "核查正在进行中。"
         reply = append_message(project_id, "assistant", txt)
         await EVENT_BUS.emit(project_id, "chat_message", reply.model_dump())
         return reply
@@ -270,7 +269,7 @@ async def handle_user_chat(project_id: str, user_text: str) -> ChatMessage:
         reply = append_message(
             project_id,
             "assistant",
-            "尚未配置 Master Agent 的大模型 API Key，请点击右上角设置图标完成配置后再继续对话。",
+            "请先配置 API Key（`⌘,`）。",
         )
         await EVENT_BUS.emit(project_id, "chat_message", reply.model_dump())
         return reply

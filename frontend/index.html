@@ -4,8 +4,20 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>标书智检</title>
+    <script>
+      (() => {
+        try {
+          const m = localStorage.getItem('bidguard-theme') || 'system';
+          const d =
+            m === 'dark' ||
+            (m !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.classList.toggle('dark', d);
+          document.documentElement.style.colorScheme = d ? 'dark' : 'light';
+        } catch {}
+      })();
+    </script>
   </head>
-  <body class="bg-[#F5F5F7] text-[#1D1D1F] antialiased selection:bg-[#007AFF]/20">
+  <body class="bg-[#F4F4F6] text-[#1D1D1F] dark:bg-[#161618] dark:text-[#F5F5F7] antialiased selection:bg-[#007AFF]/20 dark:selection:bg-[#0A84FF]/30">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
