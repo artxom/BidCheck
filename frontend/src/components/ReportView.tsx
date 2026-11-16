@@ -3,6 +3,7 @@ import {
   CheckCircle2,
   AlertTriangle,
   XCircle,
+  Circle,
   ChevronRight,
   ShieldAlert,
 } from 'lucide-react';
@@ -31,14 +32,28 @@ export const ReportView: React.FC<ReportViewProps> = ({
     );
   }
 
+  const statusOrder = (it: ChecklistItem): number => {
+    if (it.compliance_status === 'missing') return 0;
+    if (it.run_status === 'failed') return 1;
+    if (it.compliance_status === 'partial') return 2;
+    if (it.compliance_status === 'unchecked') return 3;
+    return 4;
+  };
+
   const enabledItems = checklist.filter((i) => i.enabled);
-  const filteredItems = enabledItems.filter((it) => {
-    if (filter === 'issues') {
-      return it.compliance_status === 'partial' || it.compliance_status === 'missing';
-    }
-    if (filter === 'fatal') return it.risk_level === 'fatal';
-    return true;
-  });
+  const issueItems = enabledItems.filter(
+    (it) =>
+      it.compliance_status === 'partial' ||
+      it.compliance_status === 'missing' ||
+      it.run_status === 'failed',
+  );
+  const fatalItems = enabledItems.filter((it) => it.risk_level === 'fatal');
+
+  const filteredItems = (
+    filter === 'issues' ? issueItems : filter === 'fatal' ? fatalItems : enabledItems
+  )
+    .slice()
+    .sort((a, b) => statusOrder(a) - statusOrder(b) || a.order_index - b.order_index);
 
   const verdictStyle =
     report.overall_verdict === 'ready'
@@ -114,12 +129,12 @@ export const ReportView: React.FC<ReportViewProps> = ({
       </div>
 
       {/* Filter Pills */}
-      <div className="flex items-center gap-1.5">
+      <div className="flex flex-wrap items-center gap-1.5">
         {(
           [
-            ['issues', `问题 ${report.partial_count + report.missing_count}`],
-            ['all', `全部 ${report.total_items}`],
-            ['fatal', '红线'],
+            ['issues', `问题 ${issueItems.length}`],
+            ['all', `全部 ${enabledItems.length}`],
+            ['fatal', `红线 ${fatalItems.length}`],
             ['deterministic', `形式 ${report.deterministic_findings.length}`],
           ] as [FilterMode, string][]
         ).map(([mode, label]) => (
@@ -187,12 +202,16 @@ export const ReportView: React.FC<ReportViewProps> = ({
               >
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-1.5 min-w-0">
-                    {it.compliance_status === 'passed' ? (
+                    {it.run_status === 'failed' ? (
+                      <AlertTriangle className="w-[15px] h-[15px] text-[#FF3B30] dark:text-[#FF453A] shrink-0" />
+                    ) : it.compliance_status === 'passed' ? (
                       <CheckCircle2 className="w-[15px] h-[15px] text-[#34C759] dark:text-[#30D158] shrink-0" />
                     ) : it.compliance_status === 'partial' ? (
                       <AlertTriangle className="w-[15px] h-[15px] text-[#FF9500] dark:text-[#FF9F0A] shrink-0" />
-                    ) : (
+                    ) : it.compliance_status === 'missing' ? (
                       <XCircle className="w-[15px] h-[15px] text-[#FF3B30] dark:text-[#FF453A] shrink-0" />
+                    ) : (
+                      <Circle className="w-[15px] h-[15px] text-[#C7C7CC] dark:text-[#48484A] shrink-0" />
                     )}
                     <span className="text-[12.5px] font-semibold text-[#1D1D1F] dark:text-[#F5F5F7] truncate">
                       {it.title}

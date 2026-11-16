@@ -22,7 +22,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onClearCache,
 }) => {
   return (
-    <aside className="w-[216px] shrink-0 macos-sidebar flex flex-col h-full">
+    <aside className="w-[216px] shrink-0 macos-sidebar flex flex-col h-full max-[920px]:absolute max-[920px]:inset-y-0 max-[920px]:left-0 max-[920px]:z-30 max-[920px]:shadow-2xl">
       <div className="px-3 pt-3 pb-1.5 flex items-center justify-between">
         <span className="text-[11px] font-semibold tracking-wide text-[#8E8E93] dark:text-[#8E8E93]">
           项目

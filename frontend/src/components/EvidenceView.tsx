@@ -70,7 +70,7 @@ export const EvidenceView: React.FC<EvidenceViewProps> = ({
   }
 
   return (
-    <div className="flex-1 overflow-y-auto p-3.5 space-y-3">
+    <div className="flex-1 overflow-y-auto overflow-x-hidden p-3.5 space-y-3">
       {/* Clause Summary Card */}
       {selectedItem && (
         <div className="rounded-[10px] macos-card p-3 space-y-1.5 selectable-text">
@@ -115,12 +115,12 @@ export const EvidenceView: React.FC<EvidenceViewProps> = ({
 
       {/* Outline Quick Selector */}
       {outline.length > 0 && (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 min-w-0">
           <FileSearch className="w-3.5 h-3.5 text-[#8E8E93] shrink-0" />
           <select
             value={section?.section_id || ''}
             onChange={(e) => onSelectSectionId(e.target.value)}
-            className="flex-1 h-[29px] rounded-[7px] macos-input px-2 text-[11.5px] text-[#1D1D1F] dark:text-[#F5F5F7] outline-none"
+            className="flex-1 min-w-0 w-full h-[29px] rounded-[7px] macos-input macos-select pl-2.5 text-[11.5px] text-[#1D1D1F] dark:text-[#F5F5F7] outline-none"
           >
             {outline.map((s) => (
               <option key={s.section_id} value={s.section_id}>

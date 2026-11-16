@@ -53,7 +53,7 @@ export const InspectorPane: React.FC<InspectorPaneProps> = ({
   ];
 
   return (
-    <aside className="w-[45%] max-w-[660px] min-w-[380px] bg-[#F6F6F8] dark:bg-[#18181B] flex flex-col h-full">
+    <aside className="w-[45%] max-w-[660px] min-w-[320px] bg-[#F6F6F8] dark:bg-[#18181B] flex flex-col h-full">
       {/* macOS Segmented Control Header */}
       <div className="h-[52px] px-3.5 border-b border-black/[0.065] dark:border-white/[0.075] flex items-center justify-center bg-white/60 dark:bg-[#1E1E22]/60 backdrop-blur-md shrink-0">
         <div className="w-full max-w-[300px] macos-segmented p-[2px] rounded-[8px] grid grid-cols-3 gap-0.5">

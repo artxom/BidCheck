@@ -229,13 +229,13 @@ async def generate_inspection_plan(
 
 async def handle_user_chat(project_id: str, user_text: str) -> ChatMessage:
     """Process user's conversational input with Master Agent."""
+    proj = get_project(project_id)
+    if not proj:
+        raise LookupError("项目不存在")
+
     clean_input = user_text.strip()
     user_msg = append_message(project_id, role="user", content=clean_input, msg_type="text")
     await EVENT_BUS.emit(project_id, "chat_message", user_msg.model_dump())
-
-    proj = get_project(project_id)
-    if not proj:
-        raise ValueError("项目不存在")
 
     # Fast deterministic shortcuts for unambiguous execution commands
     if clean_input in ("开始", "开始检查", "开始核查", "确认", "确认开始", "确认执行", "立即检查"):

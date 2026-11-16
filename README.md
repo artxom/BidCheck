@@ -55,6 +55,7 @@ chmod +x run.sh
 ├── tests/                   # 端到端解析、多 Agent 编排、UI 产物与文档门禁测试
 ├── docs/
 │   └── HANDOVER.md          # 工程交接手册、迭代 SOP、GitHub 提交流程与版本台账
+├── AGENTS.md                # 每次迭代强制交接与 GitHub 同步守则
 ├── .env.example             # 可选环境变量模板
 └── run.sh                   # 一键构建与启动脚本
 ```

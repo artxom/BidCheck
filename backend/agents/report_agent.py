@@ -23,11 +23,20 @@ async def assemble_final_report(project_id: str, response_ast: DocumentAST) -> I
     enabled_items = [it for it in proj.checklist if it.enabled]
     total = len(enabled_items)
     passed = sum(1 for it in enabled_items if it.compliance_status == "passed")
-    partial = sum(1 for it in enabled_items if it.compliance_status == "partial")
+    partial = sum(
+        1
+        for it in enabled_items
+        if it.compliance_status == "partial"
+        or (it.compliance_status == "unchecked" and it.run_status == "failed")
+    )
     missing = sum(1 for it in enabled_items if it.compliance_status == "missing")
+    unresolved = total - passed
 
     fatal_issues = sum(
-        1 for it in enabled_items if it.risk_level == "fatal" and it.compliance_status in ("partial", "missing")
+        1
+        for it in enabled_items
+        if it.risk_level == "fatal"
+        and (it.compliance_status in ("partial", "missing") or it.run_status == "failed")
     ) + sum(1 for d in response_ast.deterministic_findings if d.severity == "fatal")
 
     score_issues = sum(
@@ -86,7 +95,11 @@ async def assemble_final_report(project_id: str, response_ast: DocumentAST) -> I
     )
 
     # Fallback defaults in case report_assembler API errors at the very end
-    default_verdict = "high_risk" if fatal_issues > 0 else ("needs_fix" if (partial + missing) > 0 else "ready")
+    default_verdict = (
+        "high_risk"
+        if fatal_issues > 0
+        else ("needs_fix" if (partial + missing + unresolved) > 0 else "ready")
+    )
     default_label = (
         "存在废标红线缺项，严禁直接封标"
         if default_verdict == "high_risk"
@@ -99,13 +112,13 @@ async def assemble_final_report(project_id: str, response_ast: DocumentAST) -> I
     verdict_label = default_label
     readiness_score = default_score
     exec_summary = (
-        f"本次共针对 {total} 项标书要求完成逐章核查：已响应 {passed} 项，待补充 {partial} 项，未响应 {missing} 项。"
-        f"系统同时发现 {len(response_ast.deterministic_findings)} 处形式与留空预警，封标前请重点清理所有废标红线与待补充章节。"
+        f"本次共核查 {total} 项要求：通过 {passed} 项，待补充 {partial} 项，未响应 {missing} 项"
+        f"{f'，形式预警 {len(response_ast.deterministic_findings)} 处' if response_ast.deterministic_findings else ''}。"
     )
     key_risks: list[str] = [
         f"{it.title}（{STATUS_LABELS.get(it.compliance_status)}）：{it.conclusion}"
         for it in enabled_items
-        if it.compliance_status in ("missing", "partial")
+        if it.compliance_status in ("missing", "partial") or it.run_status == "failed"
     ][:6]
     priority_actions: list[str] = [
         it.remediation for it in enabled_items if it.remediation and it.compliance_status in ("missing", "partial")
@@ -123,8 +136,12 @@ async def assemble_final_report(project_id: str, response_ast: DocumentAST) -> I
             )
             v_raw = str(rep_json.get("overall_verdict", default_verdict)).lower().strip()
             if v_raw in ("ready", "needs_fix", "high_risk"):
-                # Never allow LLM to say "ready" if fatal_issues > 0
-                verdict = "high_risk" if (fatal_issues > 0 and v_raw == "ready") else v_raw
+                if fatal_issues > 0 and v_raw == "ready":
+                    verdict = "high_risk"
+                elif unresolved > 0 and v_raw == "ready":
+                    verdict = "needs_fix"
+                else:
+                    verdict = v_raw
             verdict_label = str(rep_json.get("verdict_label") or default_label).strip()
             if isinstance(rep_json.get("readiness_score"), (int, float)):
                 readiness_score = max(0, min(100, int(rep_json["readiness_score"])))

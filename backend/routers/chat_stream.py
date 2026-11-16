@@ -37,22 +37,31 @@ class RunRequest(BaseModel):
 async def api_send_chat(project_id: str, req: ChatRequest) -> dict[str, Any]:
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="消息不能为空")
+    if not get_project(project_id):
+        raise HTTPException(status_code=404, detail="项目不存在")
     try:
         msg = await handle_user_chat(project_id, req.message)
         return {"message": msg.model_dump(), "project": get_project(project_id).model_dump()}  # type: ignore[union-attr]
+    except HTTPException:
+        raise
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
-        err_msg = append_message(
-            project_id,
-            "assistant",
-            f"处理请求异常：`{str(exc)[:220]}`",
-            msg_type="error",
-        )
-        await EVENT_BUS.emit(project_id, "chat_message", err_msg.model_dump())
+        if get_project(project_id):
+            err_msg = append_message(
+                project_id,
+                "assistant",
+                f"处理请求异常：`{str(exc)[:220]}`",
+                msg_type="error",
+            )
+            await EVENT_BUS.emit(project_id, "chat_message", err_msg.model_dump())
         raise HTTPException(status_code=400, detail=str(exc)[:220]) from exc
 
 
 @router.post("/plan")
 async def api_trigger_plan(project_id: str, req: PlanRequest) -> dict[str, Any]:
+    if not get_project(project_id):
+        raise HTTPException(status_code=404, detail="项目不存在")
     try:
         msg = await generate_inspection_plan(project_id, target_lot_override=req.target_lot)
         return {"message": msg.model_dump(), "project": get_project(project_id).model_dump()}  # type: ignore[union-attr]

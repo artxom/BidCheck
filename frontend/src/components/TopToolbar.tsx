@@ -114,13 +114,13 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
   const canExportXlsx = Boolean(project && project.checklist.length > 0);
 
   return (
-    <header className="h-[44px] shrink-0 macos-toolbar px-3 flex items-center justify-between gap-3 z-20">
+    <header className="h-[44px] shrink-0 macos-toolbar px-3 flex items-center justify-between gap-3 z-30">
       {/* Left: Sidebar toggle + Project Title */}
-      <div className="flex items-center gap-2 min-w-0">
+      <div className="flex-1 flex items-center gap-2 min-w-0">
         <button
           onClick={onToggleSidebar}
           title={sidebarOpen ? '收起侧栏 (⌘\\)' : '展开侧栏 (⌘\\)'}
-          className={`w-7 h-7 rounded-[6px] flex items-center justify-center transition-colors ${
+          className={`w-7 h-7 rounded-[6px] shrink-0 flex items-center justify-center transition-colors ${
             sidebarOpen
               ? 'text-[#1D1D1F] dark:text-[#F5F5F7] bg-black/[0.05] dark:bg-white/[0.07]'
               : 'text-[#6E6E73] dark:text-[#98989D] hover:bg-black/[0.05] dark:hover:bg-white/[0.07]'
@@ -129,10 +129,10 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
           <PanelLeft className="w-[15px] h-[15px]" />
         </button>
 
-        <span className="w-[1px] h-3.5 bg-black/[0.08] dark:bg-white/[0.1]" />
+        <span className="w-[1px] h-3.5 bg-black/[0.08] dark:bg-white/[0.1] shrink-0" />
 
         <div className="flex items-center gap-2 min-w-0">
-          <span className="text-[13px] font-semibold text-[#1D1D1F] dark:text-[#F5F5F7] truncate max-w-[260px]">
+          <span className="text-[13px] font-semibold text-[#1D1D1F] dark:text-[#F5F5F7] truncate max-w-[280px]">
             {project?.name || '标书智检'}
           </span>
           {project?.target_lot && (
@@ -145,7 +145,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
 
       {/* Center: Xcode-style Live Activity Capsule */}
       {telemetry && (
-        <div className="relative" ref={popRef}>
+        <div className="relative shrink-0" ref={popRef}>
           <button
             onClick={() => setShowTelemetryPopover((v) => !v)}
             className="h-[28px] px-3 rounded-full macos-capsule flex items-center gap-2.5 text-[11.5px] text-[#1D1D1F] dark:text-[#E5E5EA] tabular-nums transition-all active:scale-[0.99]"
@@ -277,7 +277,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
       )}
 
       {/* Right: Export + Appearance + Settings */}
-      <div className="flex items-center gap-1.5">
+      <div className="flex-1 flex items-center justify-end gap-1.5 shrink-0">
         {project && (canExportDocx || canExportXlsx) && (
           <div className="relative" ref={expRef}>
             <button

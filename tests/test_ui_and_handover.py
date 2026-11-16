@@ -1,9 +1,10 @@
-"""Automated verification for macOS UI bundle, class-based Dark Mode, restrained copy, API edge cases, and handover docs."""
+"""Automated verification for macOS UI bundle, class-based Dark Mode, restrained copy, API edge cases, global redline matching, report failure safety, and handover docs."""
 
 from __future__ import annotations
 
 import os
 import tempfile
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -11,10 +12,14 @@ from httpx import ASGITransport, AsyncClient
 _TEST_TMP_DIR = tempfile.mkdtemp(prefix="bidguard_ui_test_")
 os.environ.setdefault("BIDGUARD_DATA_DIR", _TEST_TMP_DIR)
 
+from backend.agents.report_agent import assemble_final_report  # noqa: E402
+from backend.agents.worker_engine import _inspect_single_item  # noqa: E402
 from backend.config import BASE_DIR, FRONTEND_DIST_DIR  # noqa: E402
-from backend.db import init_db  # noqa: E402
+from backend.db import create_project, init_db, save_checklist  # noqa: E402
 from backend.main import app  # noqa: E402
-from backend.schemas import CATEGORY_LABELS  # noqa: E402
+from backend.parsers.indexer import SectionRetriever  # noqa: E402
+from backend.parsers.models import DeterministicFinding, DocumentAST, SectionNode  # noqa: E402
+from backend.schemas import CATEGORY_LABELS, ChecklistItem  # noqa: E402
 
 
 def test_frontend_bundle_dark_mode_and_restrained_copy() -> None:
@@ -39,6 +44,7 @@ def test_frontend_bundle_dark_mode_and_restrained_copy() -> None:
         ".macos-segmented",
         ".macos-btn-primary",
         ".macos-input",
+        ".macos-select",
     ):
         assert macos_cls in css_text, f"Missing tactile macOS class {macos_cls}"
 
@@ -46,11 +52,11 @@ def test_frontend_bundle_dark_mode_and_restrained_copy() -> None:
     assert js_files, "Compiled JS bundle must exist"
     js_text = js_files[0].read_text(encoding="utf-8")
 
-    # Verify concise macOS labels are present
-    for concise in ("置入招标与响应文件", "实况", "报告", "原文", "形式预警", "浅色", "深色", "自动"):
+    # Verify concise macOS labels and safe settings cancel action are present
+    for concise in ("置入招标与响应文件", "实况", "报告", "原文", "形式预警", "浅色", "深色", "自动", "取消"):
         assert concise in js_text
 
-    # Verify verbose headache-inducing prompts were removed
+    # Verify verbose headache-inducing prompts and browser alert() were removed
     for verbose_removed in (
         "挂载招标文件与响应文件后由 Master 自动制定核查计划",
         "内置固有规则扫描预警",
@@ -63,11 +69,13 @@ def test_frontend_bundle_dark_mode_and_restrained_copy() -> None:
 
 def test_handover_docs_and_gitignore_guardrails() -> None:
     gitignore = (BASE_DIR / ".gitignore").read_text(encoding="utf-8")
-    for pattern in ("*.docx", "*.pdf", "*.xlsx", "data/", ".env", "frontend/dist/"):
+    for pattern in ("*.docx", "*.pdf", "*.xlsx", "data/", ".env", "frontend/dist/", "*.tsbuildinfo"):
         assert pattern in gitignore
 
+    agents_md = BASE_DIR / "AGENTS.md"
     readme = BASE_DIR / "README.md"
     handover = BASE_DIR / "docs" / "HANDOVER.md"
+    assert agents_md.exists() and "docs/HANDOVER.md" in agents_md.read_text(encoding="utf-8")
     assert readme.exists() and len(readme.read_text(encoding="utf-8")) > 500
     assert handover.exists()
     handover_text = handover.read_text(encoding="utf-8")
@@ -101,27 +109,143 @@ async def test_api_edge_cases_and_spa_security() -> None:
         r_empty = await client.post(f"/api/projects/{pid}/chat", json={"message": "   "})
         assert r_empty.status_code == 400
 
-        # 3. Starting run before checklist exists rejected cleanly (400)
+        # 3. Chat & Plan on non-existent project return clean 404 (not 500 ForeignKey IntegrityError!)
+        r_chat_404 = await client.post("/api/projects/proj_nonexistent/chat", json={"message": "你好"})
+        assert r_chat_404.status_code == 404
+        r_plan_404 = await client.post("/api/projects/proj_nonexistent/plan", json={})
+        assert r_plan_404.status_code == 404
+
+        # 4. Starting run before checklist exists rejected cleanly (400)
         r_run_early = await client.post(f"/api/projects/{pid}/run", json={"recheck_only": False})
         assert r_run_early.status_code == 400
 
-        # 4. Non-existent project returns 404
+        # 5. Non-existent project GET returns 404
         r_404 = await client.get("/api/projects/proj_nonexistent")
         assert r_404.status_code == 404
 
-        # 5. Unknown /api/ route returns JSON 404, not SPA HTML
+        # 6. Unknown /api/ route returns JSON 404, not SPA HTML
         r_api_404 = await client.get("/api/unknown-endpoint")
         assert r_api_404.status_code == 404
         assert r_api_404.json()["detail"] == "Not Found"
 
-        # 6. Settings endpoint returns concise 4-role labels
+        # 7. Settings endpoint returns concise 4-role labels
         r_settings = await client.get("/api/settings")
         assert r_settings.status_code == 200
         role_labels = [r["label"] for r in r_settings.json()["roles"]]
         assert "主控规划 (Master)" in role_labels
         assert "视觉验图 (Vision)" in role_labels
 
-        # 7. Root serves SPA HTML
+        # 8. Root serves SPA HTML
         r_root = await client.get("/")
         assert r_root.status_code == 200
         assert "标书智检" in r_root.text
+
+
+@pytest.mark.asyncio
+async def test_global_redline_injection_and_failed_item_report_guard() -> None:
+    init_db()
+    proj = create_project("红线与失败保护测试")
+    pid = proj.id
+
+    cover_sec = SectionNode(
+        section_id="sec_0001",
+        level=1,
+        title="响应文件封面",
+        breadcrumb="响应文件封面",
+        page_start=1,
+        page_end=1,
+        paragraphs=["项目名称：测试采购项目", "联系人："],
+    )
+    other_sec = SectionNode(
+        section_id="sec_0002",
+        level=1,
+        title="技术方案",
+        breadcrumb="技术方案",
+        page_start=2,
+        page_end=5,
+        paragraphs=["系统架构说明"],
+    )
+    det_finding = DeterministicFinding(
+        finding_id="det_1",
+        rule_type="cover_blank",
+        severity="warning",
+        title="封面字段「联系人」留空未填",
+        detail="封面联系人未填写",
+        section_id="sec_0001",
+        breadcrumb="响应文件封面",
+        page_hint="P1",
+        snippet="联系人：",
+    )
+    ast = DocumentAST(
+        doc_id=f"{pid}_resp",
+        filename="resp.docx",
+        file_type="docx",
+        doc_role="response",
+        source_path="/tmp/resp.docx",
+        file_size_bytes=1024,
+        total_pages=5,
+        sections=[cover_sec, other_sec],
+        deterministic_findings=[det_finding],
+    )
+
+    # 1. Verify mandatory global redline title triggers cover section + global_det_summary injection
+    redline_item = ChecklistItem(
+        item_id="CHK-001",
+        order_index=0,
+        category="format_redline",
+        title="封面完整性、无待补充留白与防串标一致性核查",
+        requirement_text="检查封面与待补充标记",
+        risk_level="fatal",
+        search_keywords=["不存在的关键词XYZ"],
+    )
+    failed_fatal_item = ChecklistItem(
+        item_id="CHK-002",
+        order_index=1,
+        category="qualification",
+        title="营业执照核验",
+        requirement_text="提供营业执照",
+        risk_level="fatal",
+        run_status="failed",
+        compliance_status="unchecked",
+        conclusion="检查执行异常：Timeout",
+    )
+    save_checklist(pid, [redline_item, failed_fatal_item])
+
+    captured_prompts: list[str] = []
+
+    async def fake_chat_json(*, user_prompt: str, **_kwargs):
+        captured_prompts.append(user_prompt)
+        return (
+            {
+                "compliance_status": "partial",
+                "matched_section_ids": ["sec_0001"],
+                "evidence_excerpt": "联系人留空",
+                "conclusion": "封面联系人未填",
+                "remediation": "补齐联系人",
+            },
+            "mock-model",
+            50,
+        )
+
+    retriever = SectionRetriever(ast)
+    with patch("backend.agents.worker_engine.LLM_GATEWAY.chat_json", new=AsyncMock(side_effect=fake_chat_json)):
+        await _inspect_single_item(
+            project_id=pid,
+            item=redline_item,
+            response_ast=ast,
+            retriever=retriever,
+            outline_brief="sec_0001 响应文件封面",
+            det_by_sec={"sec_0001": [det_finding]},
+        )
+
+    assert len(captured_prompts) == 1
+    assert "【全篇确定性红线扫描汇总】" in captured_prompts[0]
+    assert "sec_0001" in captured_prompts[0]
+
+    # 2. Verify report assembler NEVER marks verdict 'ready' when items failed with compliance_status='unchecked'
+    save_checklist(pid, [failed_fatal_item])
+    with patch("backend.agents.report_agent.LLM_GATEWAY.has_configured_key", return_value=False):
+        rep = await assemble_final_report(pid, ast)
+    assert rep is not None
+    assert rep.overall_verdict == "high_risk"
+    assert rep.fatal_issue_count >= 1

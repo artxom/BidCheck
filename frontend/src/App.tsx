@@ -20,8 +20,11 @@ import type {
 
 export const App: React.FC = () => {
   const { themeMode, resolvedTheme, setThemeMode, toggleLightDark } = useTheme();
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth >= 980 : true,
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [toastError, setToastError] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [activeProject, setActiveProject] = useState<ProjectDetail | null>(null);
   const [samples, setSamples] = useState<WorkspaceSample[]>([]);
@@ -36,6 +39,13 @@ export const App: React.FC = () => {
   const [uploadingRole, setUploadingRole] = useState<'tender' | 'response' | null>(null);
   const [uploadPct, setUploadPct] = useState(0);
   const [sendingChat, setSendingChat] = useState(false);
+
+  const showError = useCallback((msg: string) => {
+    setToastError(msg);
+    window.setTimeout(() => {
+      setToastError((cur) => (cur === msg ? null : cur));
+    }, 3500);
+  }, []);
 
   const refreshProjectList = useCallback(async () => {
     const res = await api.listProjects();
@@ -100,8 +110,21 @@ export const App: React.FC = () => {
         setSidebarOpen((v) => !v);
       }
     };
+    let prevWide = window.innerWidth >= 960;
+    const onResize = () => {
+      const nowWide = window.innerWidth >= 960;
+      if (prevWide && !nowWide) {
+        setSidebarOpen(false);
+      }
+      prevWide = nowWide;
+    };
+
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('resize', onResize);
+    };
   }, [refreshProjectList, selectProject]);
 
   // Real-time SSE connection per active project
@@ -220,7 +243,7 @@ export const App: React.FC = () => {
       const sRes = await api.getSettings();
       setCacheMb(sRes.storage.cache_mb);
     } catch (err) {
-      alert(err instanceof Error ? err.message : '导入失败');
+      showError(err instanceof Error ? err.message : '导入失败');
     } finally {
       setUploadingRole(null);
       setUploadPct(0);
@@ -237,7 +260,7 @@ export const App: React.FC = () => {
       if (res.project.response_doc) loadOutline(activeProject.id);
       await refreshProjectList();
     } catch (err) {
-      alert(err instanceof Error ? err.message : '挂载失败');
+      showError(err instanceof Error ? err.message : '挂载失败');
     } finally {
       setUploadingRole(null);
       setUploadPct(0);
@@ -246,11 +269,22 @@ export const App: React.FC = () => {
 
   const handleSendMessage = async (msg: string) => {
     if (!activeProject) return;
+    const pid = activeProject.id;
     setSendingChat(true);
     try {
-      await api.sendChat(activeProject.id, msg);
-    } catch {
-      // Error bubble already pushed via backend SSE
+      const res = await api.sendChat(pid, msg);
+      setActiveProject((prev) => (prev && prev.id === pid ? res.project : prev));
+      refreshProjectList();
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : '发送失败';
+      setActiveProject((prev) => {
+        if (!prev || prev.id !== pid) return prev;
+        if (prev.messages.some((m) => m.msg_type === 'error' && m.content.includes(detail))) {
+          return prev;
+        }
+        return prev;
+      });
+      showError(detail);
     } finally {
       setSendingChat(false);
     }
@@ -262,13 +296,26 @@ export const App: React.FC = () => {
     try {
       await api.startRun(activeProject.id, recheckOnly);
     } catch (err) {
-      alert(err instanceof Error ? err.message : '启动失败');
+      showError(err instanceof Error ? err.message : '启动失败');
     }
   };
 
   const handleToggleItem = async (itemId: string, enabled: boolean) => {
     if (!activeProject) return;
-    await api.toggleItem(activeProject.id, itemId, enabled);
+    const pid = activeProject.id;
+    try {
+      const res = await api.toggleItem(pid, itemId, enabled);
+      setActiveProject((prev) =>
+        prev && prev.id === pid
+          ? {
+              ...prev,
+              checklist: prev.checklist.map((i) => (i.item_id === itemId ? res.item : i)),
+            }
+          : prev,
+      );
+    } catch (err) {
+      showError(err instanceof Error ? err.message : '更新失败');
+    }
   };
 
   const handleInspectEvidence = (item: ChecklistItem | null, sectionId?: string) => {
@@ -299,13 +346,19 @@ export const App: React.FC = () => {
         onOpenSettings={() => setSettingsOpen(true)}
       />
 
-      <main className="flex-1 flex min-h-0">
+      <main className="relative flex-1 flex min-h-0 overflow-hidden">
         {sidebarOpen && (
           <Sidebar
             projects={projects}
             activeId={activeProject?.id || null}
-            onSelect={selectProject}
-            onCreate={handleCreateProject}
+            onSelect={(id) => {
+              selectProject(id);
+              if (window.innerWidth < 920) setSidebarOpen(false);
+            }}
+            onCreate={() => {
+              handleCreateProject();
+              if (window.innerWidth < 920) setSidebarOpen(false);
+            }}
             onDelete={handleDeleteProject}
             cacheMb={cacheMb}
             onClearCache={handleClearCache}
@@ -315,6 +368,7 @@ export const App: React.FC = () => {
         {activeProject && (
           <>
             <MasterChatPane
+              key={activeProject.id}
               project={activeProject}
               samples={samples}
               uploadingRole={uploadingRole}
@@ -345,6 +399,15 @@ export const App: React.FC = () => {
           </>
         )}
       </main>
+
+      {toastError && (
+        <div
+          onClick={() => setToastError(null)}
+          className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 px-3.5 py-2 rounded-full macos-popover text-[12px] font-medium text-[#FF3B30] dark:text-[#FF6961] cursor-pointer max-w-[85vw] truncate"
+        >
+          {toastError}
+        </div>
+      )}
 
       <SettingsModal
         open={settingsOpen}

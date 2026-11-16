@@ -176,7 +176,7 @@ cd frontend && npm run dev
 
 ## 六、每次阶段执行后的强制交接规程（SOP）
 
-后续无论是人工开发还是 AI Agent 执行阶段任务，在任务收尾时**必须严格执行以下 5 步闭环**：
+项目根目录已同步配置 **[AGENTS.md](../AGENTS.md)** 守则。后续无论是人工开发还是 AI Agent 执行阶段任务，在任务收尾时**必须严格执行以下 5 步闭环**：
 
 1. **编译与测试门禁**：运行 `(cd frontend && npm run build)` 与 `.venv/bin/pytest -v`，确保零报错通过。
 2. **更新交接文档**：
@@ -253,21 +253,21 @@ git log --oneline -n 5
 
 ## 八、里程碑交接台账（Milestone Handover Log）
 
-### Milestone 2 — `v0.2.0`（2026-11-16，Commit `4bd1da5`）
+### Milestone 2 — `v0.2.0`（2026-11-16）
 - **阶段目标**：精简全站冗余提示文案，升级原生 macOS 视觉层次与操控质感，支持深色模式（Dark Mode），建立严格的工程交接文档体系与 GitHub 同步规程。
 - **核心变更内容**：
   1. **深色模式与三态外观引擎**：新增 `frontend/src/theme.ts` 与 `frontend/index.html` 首屏防闪烁脚本，基于 Tailwind v4 `@custom-variant dark (&:where(.dark, .dark *))` 实现 `浅色 / 深色 / 自动跟随系统` 三态切换（支持顶栏一键切换与设置面板三态选择，自动持久化至 `localStorage` 并实时响应 macOS 系统外观变化）。
-  2. **macOS 原生材质与组件质感升级**：在 `frontend/src/index.css` 建立高饱和毛玻璃工具栏（`.macos-toolbar`）、渐变源列表侧栏（`.macos-sidebar`）、微高光内描边卡片（`.macos-card`）、内凹槽控件（`.macos-well` / `.macos-capsule` / `.macos-segmented`）、原生光泽按钮与自定义复选框/开关控件；对齐中栏双文档槽与右栏检视器 `52px` 顶栏分割线，新增 `⌘\` 收起侧栏与 `Esc` 关闭浮层快捷键。
-  3. **全站克制化文案重构**：全面剔除前端空状态、设置项说明、筛选器与后端 Master 规划卡/报告卡中的教学式冗长提示词；将五大检查维度统一精简为四字标签（`资格审查`、`商务资信`、`技术方案`、`采购需求`、`形式红线`）；实况清单在未执行前保持单行紧凑展示，消除大段条款原文刷屏干扰。
-  4. **工程化启动与交接文档体系**：升级 `run.sh` 支持检测前端源码变更自动增量重编译；新增 `.env.example`、重写 `README.md`、新建 `docs/HANDOVER.md` 及 UI/交接门禁测试 `tests/test_ui_and_handover.py`。
+  2. **macOS 原生材质、防溢出与操控质感升级**：在 `frontend/src/index.css` 建立高饱和毛玻璃工具栏（`.macos-toolbar`）、对称居中遥测胶囊、渐变源列表侧栏（`.macos-sidebar`，窄窗口自动抽屉化防裁切）、微高光内描边卡片（`.macos-card`）、内凹槽控件（`.macos-well` / `.macos-capsule` / `.macos-segmented`）、原生上下双箭头下拉框（`.macos-select`，防止长章节名横向撑破原文检视器）、光泽按钮与浮层提示条；修复空会话区假滚动条、左侧文档槽样本浮层越界、历史规划卡主按钮竞争与设置四角色面板裁切问题。
+  3. **全站克制化文案与后端鲁棒性加固**：全面剔除前端空状态、设置项说明、筛选器与后端 Master 规划卡/报告卡中的教学式冗长提示词；将五大检查维度统一精简为四字标签（`资格审查`、`商务资信`、`技术方案`、`采购需求`、`形式红线`）；修复全局红线检查项 `is_global_redline` 关键词匹配、异常失败项报告结论防误判硬锁及不存在项目的 `/chat`、`plan` 路由 `404` 边界处理。
+  4. **工程化启动与交接门禁体系**：升级 `run.sh` 支持检测前端源码变更自动增量重编译；在 `.gitignore` 排除 `*.tsbuildinfo`；新增 `AGENTS.md`、`.env.example`、重写 `README.md`、新建 `docs/HANDOVER.md` 及全覆盖回归测试 `tests/test_ui_and_handover.py`。
 - **涉及主要文件**：
   - 前端：`frontend/index.html`、`frontend/package.json`、`frontend/src/index.css`、`frontend/src/theme.ts`、`frontend/src/types.ts`、`frontend/src/api.ts`、`frontend/src/App.tsx`、`frontend/src/components/*.tsx`（全部 8 个组件）
-  - 后端：`backend/main.py`、`backend/config.py`、`backend/schemas.py`、`backend/db.py`、`backend/llm/prompts.py`、`backend/routers/projects.py`、`backend/routers/chat_stream.py`、`backend/agents/*.py`
-  - 工程与文档：`pyproject.toml`、`run.sh`、`.env.example`、`README.md`、`docs/HANDOVER.md`、`tests/test_ui_and_handover.py`
+  - 后端：`backend/main.py`、`backend/config.py`、`backend/schemas.py`、`backend/db.py`、`backend/llm/gateway.py`、`backend/llm/prompts.py`、`backend/routers/projects.py`、`backend/routers/chat_stream.py`、`backend/agents/*.py`
+  - 工程与文档：`.gitignore`、`pyproject.toml`、`run.sh`、`.env.example`、`AGENTS.md`、`README.md`、`docs/HANDOVER.md`、`tests/test_ui_and_handover.py`
 - **验证记录**：
-  - `cd frontend && npm run build`（`tsc -b && vite build` 零错误通过，产物验证包含 `:where(.dark,.dark *)` 与 `.macos-*` 规则）
-  - `.venv/bin/pytest -v` 全量通过
-  - 本地 `http://127.0.0.1:8000` 实服 HTTP/SSE/静态产物校验通过
+  - `cd frontend && npm run build`（`tsc -b && vite build` 零错误通过，验证 `.macos-*` 与 `:where(.dark,.dark *)` 规则）
+  - `.venv/bin/pytest -v` 全量通过（含百兆真实标书解析、导出、API 边界与全局红线核查测试）
+  - 真实 Chromium (Microsoft Edge Headless CDP) 多分辨率（`1440×900` / `1024×768` / `900×700`）浅色与深色模式逐屏渲染截图与 DOM 几何零溢出实测通过
 - **已知边界与下一阶段建议**：
   - 当前导出 Word/Excel 报告采用固定商务浅底打印配色（符合线下纸质审阅与打印习惯，不受网页深色模式影响）；
   - 后续迭代可按需增加「自定义核查规则模板保存」或「新旧两版响应文件差异对比视图」。

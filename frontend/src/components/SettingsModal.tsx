@@ -140,7 +140,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-[730px] max-w-full h-[510px] rounded-[14px] bg-[#F4F4F6] dark:bg-[#1C1C20] shadow-[0_28px_70px_rgba(0,0,0,0.28)] dark:shadow-[0_32px_80px_rgba(0,0,0,0.68)] border border-black/[0.1] dark:border-white/[0.12] flex flex-col overflow-hidden"
+        className="w-[740px] max-w-full h-[560px] max-h-[90vh] rounded-[14px] bg-[#F4F4F6] dark:bg-[#1C1C20] shadow-[0_28px_70px_rgba(0,0,0,0.28)] dark:shadow-[0_32px_80px_rgba(0,0,0,0.68)] border border-black/[0.1] dark:border-white/[0.12] flex flex-col overflow-hidden"
       >
         {/* macOS System Settings Titlebar */}
         <div className="h-[46px] px-4 macos-toolbar flex items-center justify-between shrink-0">
@@ -326,14 +326,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
         ) : (
           /* 4-Role Routing Editor */
-          <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
+          <div className="flex-1 overflow-y-auto p-3.5 space-y-2">
             {roles.map((rDef) => {
               const route = settings.routes[rDef.role];
               if (!route) return null;
               const presetForProv = presets.find((p) => p.id === route.provider_id);
 
               return (
-                <div key={rDef.role} className="rounded-[10px] macos-card p-3.5 space-y-2.5">
+                <div key={rDef.role} className="rounded-[10px] macos-card px-3.5 py-2.5 space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-[12.5px] font-semibold text-[#1D1D1F] dark:text-[#F5F5F7]">
                       {rDef.label}
@@ -359,8 +359,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     )}
                   </div>
 
-                  <div className="grid grid-cols-12 gap-2.5 items-center">
-                    <div className="col-span-4">
+                  <div className="grid grid-cols-12 gap-2 items-center">
+                    <div className="col-span-3">
                       <label className="block text-[10.5px] text-[#8E8E93] mb-0.5">供应商</label>
                       <select
                         value={route.provider_id}
@@ -379,7 +379,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               : {}),
                           });
                         }}
-                        className="w-full h-[30px] rounded-[6px] macos-input px-2 text-[12px] text-[#1D1D1F] dark:text-[#F5F5F7] outline-none"
+                        className="w-full min-w-0 h-[30px] rounded-[6px] macos-input macos-select pl-2 text-[12px] text-[#1D1D1F] dark:text-[#F5F5F7] outline-none"
                       >
                         {settings.providers.map((p) => (
                           <option key={p.id} value={p.id}>
@@ -434,33 +434,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       />
                     </div>
 
-                    <div className="col-span-2">
+                    <div className="col-span-3">
                       <label className="block text-[10.5px] text-[#8E8E93] mb-0.5">
                         单价 (¥/M)
                       </label>
-                      <div className="flex items-center gap-1">
-                        <input
-                          type="number"
-                          step="0.1"
-                          value={route.input_price_per_m}
-                          onChange={(e) =>
-                            updateRoute(rDef.role, {
-                              input_price_per_m: Math.max(0, Number(e.target.value) || 0),
-                            })
-                          }
-                          className="w-1/2 h-[30px] rounded-[6px] macos-input px-1.5 text-[11px] text-[#1D1D1F] dark:text-[#F5F5F7] tabular-nums outline-none"
-                        />
-                        <input
-                          type="number"
-                          step="0.1"
-                          value={route.output_price_per_m}
-                          onChange={(e) =>
-                            updateRoute(rDef.role, {
-                              output_price_per_m: Math.max(0, Number(e.target.value) || 0),
-                            })
-                          }
-                          className="w-1/2 h-[30px] rounded-[6px] macos-input px-1.5 text-[11px] text-[#1D1D1F] dark:text-[#F5F5F7] tabular-nums outline-none"
-                        />
+                      <div className="flex items-center gap-1.5">
+                        <div className="flex-1 h-[30px] rounded-[6px] macos-input px-1.5 flex items-center gap-1">
+                          <span className="text-[10px] text-[#8E8E93] shrink-0">入</span>
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={route.input_price_per_m}
+                            onChange={(e) =>
+                              updateRoute(rDef.role, {
+                                input_price_per_m: Math.max(0, Number(e.target.value) || 0),
+                              })
+                            }
+                            className="w-full min-w-0 bg-transparent text-[11.5px] text-[#1D1D1F] dark:text-[#F5F5F7] tabular-nums outline-none"
+                          />
+                        </div>
+                        <div className="flex-1 h-[30px] rounded-[6px] macos-input px-1.5 flex items-center gap-1">
+                          <span className="text-[10px] text-[#8E8E93] shrink-0">出</span>
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={route.output_price_per_m}
+                            onChange={(e) =>
+                              updateRoute(rDef.role, {
+                                output_price_per_m: Math.max(0, Number(e.target.value) || 0),
+                              })
+                            }
+                            className="w-full min-w-0 bg-transparent text-[11.5px] text-[#1D1D1F] dark:text-[#F5F5F7] tabular-nums outline-none"
+                          />
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -507,7 +513,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               onClick={onClose}
               className="h-[29px] px-3.5 rounded-[7px] macos-btn-secondary text-[12px] font-medium text-[#1D1D1F] dark:text-[#F5F5F7]"
             >
-              完成
+              取消
             </button>
             <button
               disabled={saving}

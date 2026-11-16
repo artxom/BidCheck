@@ -76,9 +76,9 @@ async def _inspect_single_item(
 
     try:
         # Special handling for global formal redline item: combine deterministic scan results + cover/header check
-        is_global_redline = (
-            item.category == "format_redline"
-            and any(k in item.title for k in ("全局形式红线", "封面与留空", "一致性与防串标"))
+        is_global_redline = item.category == "format_redline" and any(
+            k in item.title
+            for k in ("全局形式红线", "封面完整性", "封面与留空", "防串标", "一致性与防串标")
         )
 
         candidates = retriever.search(

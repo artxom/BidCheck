@@ -191,13 +191,13 @@ class LLMGateway:
         cfg = settings or get_settings()
         route = cfg.routes.get(role)
         if not route or not route.enabled:
-            raise RuntimeError(f"模型角色「{role}」尚未启用，请在右上角模型配置中绑定。")
+            raise RuntimeError(f"角色「{role}」未启用（⌘,）")
         prov_map = {p.id: p for p in cfg.providers}
         provider = prov_map.get(route.provider_id)
         if not provider:
-            raise RuntimeError(f"未找到角色「{role}」关联的模型供应商：{route.provider_id}")
+            raise RuntimeError(f"未找到供应商：{route.provider_id}")
         if not provider.api_key.strip():
-            raise RuntimeError(f"供应商「{provider.name}」尚未填写 API Key，请点击右上角设置图标完成配置。")
+            raise RuntimeError(f"请先配置「{provider.name}」API Key（⌘,）")
         return provider, route
 
     def has_configured_key(self, role: str = "master") -> bool:
