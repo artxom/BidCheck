@@ -1,0 +1,30 @@
+[project]
+name = "bidguard"
+version = "0.1.0"
+description = "标书自动检查工作台 — 基于大模型多 Agent 协同与 OOXML 深度解析的投标响应核查系统"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "python-multipart>=0.0.12",
+    "openai>=1.55.0",
+    "pydantic>=2.9.0",
+    "lxml>=5.3.0",
+    "python-docx>=1.1.2",
+    "openpyxl>=3.1.5",
+    "pymupdf>=1.24.0",
+    "Pillow>=11.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.27.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]

@@ -1,0 +1,34 @@
+# Sensitive tender & bid response documents (avoid large binaries & confidential materials in Git)
+*.docx
+*.doc
+*.pdf
+*.xlsx
+~$*
+
+# Runtime storage, SQLite DB & extracted media caches
+data/
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+*.egg-info/
+dist/
+build/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
