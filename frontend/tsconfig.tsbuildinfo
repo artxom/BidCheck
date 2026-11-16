@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/api.ts","./src/main.tsx","./src/types.ts","./src/components/evidenceview.tsx","./src/components/inspectorpane.tsx","./src/components/liverunview.tsx","./src/components/masterchatpane.tsx","./src/components/reportview.tsx","./src/components/settingsmodal.tsx","./src/components/sidebar.tsx","./src/components/toptoolbar.tsx"],"version":"5.7.3"}
